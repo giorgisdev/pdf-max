@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF Resume Editor</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header id="toolbar">
+    <div class="toolbar-group">
+      <button id="btn-undo" class="btn icon" title="Undo (Ctrl/Cmd+Z)" disabled>&#8630;</button>
+      <button id="btn-redo" class="btn icon" title="Redo (Ctrl/Cmd+Y)" disabled>&#8631;</button>
+    </div>
+    <div class="toolbar-group">
+      <button id="btn-open" class="btn">Select file</button>
+      <input type="file" id="file-input" accept="application/pdf,.pdf" hidden />
+      <button id="btn-add-text" class="btn" disabled>+ Add text</button>
+    </div>
+
+    <div class="toolbar-group" id="text-controls" hidden>
+      <select id="ctl-font" title="Font family"></select>
+      <input id="ctl-size" type="number" min="4" max="96" step="0.5" title="Font size" />
+      <button id="ctl-bold" class="btn toggle" title="Bold"><b>B</b></button>
+      <button id="ctl-italic" class="btn toggle" title="Italic"><i>I</i></button>
+      <input id="ctl-color" type="color" value="#000000" title="Text color" />
+      <button id="ctl-duplicate" class="btn" title="Duplicate (Cmd/Ctrl+C, Cmd/Ctrl+V)">Duplicate</button>
+      <button id="ctl-delete" class="btn danger" title="Delete text">Delete</button>
+    </div>
+
+    <div class="toolbar-group right">
+      <button id="btn-zoom-out" class="btn icon" title="Zoom out (Ctrl/Cmd+-)" disabled>&minus;</button>
+      <span id="zoom-label" title="Zoom level">Fit</span>
+      <button id="btn-zoom-in" class="btn icon" title="Zoom in (Ctrl/Cmd++)" disabled>+</button>
+      <button id="btn-export" class="btn primary" disabled>Export PDF</button>
+    </div>
+  </header>
+
+  <div id="font-report" hidden></div>
+
+  <main id="workspace">
+    <div id="dropzone">
+      <div class="dz-inner">
+        <div class="dz-icon">&#128196;</div>
+        <p><strong>Drop a PDF here</strong></p>
+        <p class="dz-sub">or use "Select file" above</p>
+      </div>
+    </div>
+    <div id="pages"></div>
+  </main>
+
+  <div id="status-bar"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

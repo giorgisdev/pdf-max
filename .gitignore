@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.DS_Store
+
+# Proprietary system fonts (copied locally from macOS — not redistributable).
+# The OFL-licensed fonts (Ibarra Real Nova, Libre Caslon Text) ARE committed.
+# If this repo is private and just for your own machines, you can force-add
+# these with: git add -f public/fonts
+public/fonts/Arial*.ttf
+public/fonts/TimesNewRoman*.ttf
+public/fonts/Georgia*.ttf
+public/fonts/Garamond*.ttf
+public/fonts/Calibri*.ttf
+public/fonts/Symbol.ttf

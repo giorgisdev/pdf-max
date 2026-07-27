@@ -6,7 +6,10 @@ import {
 import { exportPdf } from './exporter.js';
 import { inject } from '@vercel/analytics';
 
+
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+
+inject();
 
 // ---------- state ----------
 

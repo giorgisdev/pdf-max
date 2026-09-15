@@ -4,6 +4,7 @@ import {
   FONTS, DEFAULT_FONT_ID, detectFont, cleanFontName, checkFontAvailability, styleKey,
 } from './fonts.js';
 import { exportPdf } from './exporter.js';
+import { saveDraft, loadDraft, clearDraft } from './draft.js';
 import { inject } from '@vercel/analytics';
 
 
@@ -26,7 +27,10 @@ const state = {
   zoomIdx: 1,           // index into ZOOM_LEVELS; 1 = fit-width
   clipboard: null,      // copied item snapshot for paste/duplicate
   pasteCount: 0,
+  pageOrder: [],         // original (0-based) page indices, in current display/export order
+  selectedPages: new Set(), // original page indices selected in the pages panel
 };
+let lastClickedPage = null; // shift-click range anchor for the pages panel
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -38,6 +42,12 @@ const els = {
   btnUndo: $('btn-undo'), btnRedo: $('btn-redo'),
   btnZoomIn: $('btn-zoom-in'), btnZoomOut: $('btn-zoom-out'), zoomLabel: $('zoom-label'),
   ctlDuplicate: $('ctl-duplicate'), ctlLinks: $('ctl-links'),
+  pagesGrid: $('pages-grid'), pagesPanelHint: $('pages-panel-hint'), btnDeletePages: $('btn-delete-pages'),
+  confirmModal: $('confirm-modal'), confirmText: $('confirm-modal-text'),
+  confirmCancel: $('confirm-cancel'), confirmOk: $('confirm-ok'),
+  autosaveIndicator: $('autosave-indicator'),
+  restoreBanner: $('restore-banner'), restoreBannerText: $('restore-banner-text'),
+  btnRestore: $('btn-restore'), btnDiscardDraft: $('btn-discard-draft'),
 };
 
 // ---------- helpers ----------
@@ -60,6 +70,7 @@ async function loadFile(file) {
     return;
   }
   status(`Loading ${file.name}…`);
+  hideRestoreBanner();
   const bytes = new Uint8Array(await file.arrayBuffer());
   state.fileName = file.name;
   state.pdfBytes = bytes;
@@ -70,7 +81,12 @@ async function loadFile(file) {
   history.redo.length = 0;
   updateUndoButtons();
   state.clipboard = null;
+  state.pageOrder = [];
+  state.selectedPages.clear();
+  lastClickedPage = null;
   els.pages.innerHTML = '';
+  els.pagesGrid.innerHTML = '';
+  els.btnDeletePages.disabled = true;
 
   try {
     // pdf.js transfers the buffer to its worker, so hand it a copy.
@@ -81,6 +97,7 @@ async function loadFile(file) {
   }
 
   els.dropzone.classList.add('hidden');
+  els.pagesPanelHint.hidden = true;
   for (let p = 1; p <= state.pdfDoc.numPages; p++) {
     await renderPage(p);
   }
@@ -250,6 +267,305 @@ async function renderPage(pageNum) {
       selectItem(null);
     }
   });
+
+  state.pageOrder.push(pageNum - 1);
+  await mountPageThumb(pageState);
+}
+
+// ---------- pages panel (thumbnails, reorder, delete) ----------
+
+async function mountPageThumb(pageState) {
+  const origIdx = pageState.pageNum - 1;
+  const thumb = document.createElement('div');
+  thumb.className = 'page-thumb';
+  thumb.draggable = true;
+  thumb.dataset.idx = String(origIdx);
+
+  const canvasWrap = document.createElement('div');
+  canvasWrap.className = 'page-thumb-canvas';
+  thumb.appendChild(canvasWrap);
+
+  const label = document.createElement('div');
+  label.className = 'page-thumb-label';
+  label.textContent = String(state.pageOrder.indexOf(origIdx) + 1);
+  thumb.appendChild(label);
+
+  els.pagesGrid.appendChild(thumb);
+  pageState.thumbEl = thumb;
+  pageState.thumbLabelEl = label;
+
+  const THUMB_W = 168;
+  const scale = THUMB_W / pageState.baseWidth;
+  const dpr = window.devicePixelRatio || 1;
+  const viewport = pageState.page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.floor(viewport.width * dpr);
+  canvas.height = Math.floor(viewport.height * dpr);
+  canvas.style.width = `${viewport.width}px`;
+  canvas.style.height = `${viewport.height}px`;
+  canvasWrap.appendChild(canvas);
+  try {
+    await pageState.page.render({
+      canvasContext: canvas.getContext('2d'),
+      viewport: pageState.page.getViewport({ scale: scale * dpr }),
+    }).promise;
+  } catch { /* ignore — thumbnail is non-critical */ }
+
+  thumb.addEventListener('click', (e) => onThumbClick(origIdx, e));
+  thumb.addEventListener('dragstart', (e) => {
+    e.dataTransfer.setData('text/plain', String(origIdx));
+    e.dataTransfer.effectAllowed = 'move';
+    thumb.classList.add('dragging');
+  });
+  thumb.addEventListener('dragend', () => thumb.classList.remove('dragging'));
+  thumb.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    thumb.classList.add('drag-over');
+  });
+  thumb.addEventListener('dragleave', () => thumb.classList.remove('drag-over'));
+  thumb.addEventListener('drop', (e) => {
+    e.preventDefault();
+    thumb.classList.remove('drag-over');
+    const fromIdx = Number(e.dataTransfer.getData('text/plain'));
+    reorderPage(fromIdx, origIdx);
+  });
+}
+
+function onThumbClick(origIdx, e) {
+  if (e.shiftKey && lastClickedPage != null) {
+    const order = state.pageOrder;
+    const a = order.indexOf(lastClickedPage);
+    const b = order.indexOf(origIdx);
+    if (a !== -1 && b !== -1) {
+      const [lo, hi] = a < b ? [a, b] : [b, a];
+      for (let i = lo; i <= hi; i++) state.selectedPages.add(order[i]);
+    }
+  } else if (e.metaKey || e.ctrlKey) {
+    if (state.selectedPages.has(origIdx)) state.selectedPages.delete(origIdx);
+    else state.selectedPages.add(origIdx);
+  } else {
+    state.selectedPages.clear();
+    state.selectedPages.add(origIdx);
+    state.pages[origIdx]?.wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  lastClickedPage = origIdx;
+  refreshPageSelectionUI();
+}
+
+function refreshPageSelectionUI() {
+  for (const ps of state.pages) {
+    ps?.thumbEl?.classList.toggle('selected', state.selectedPages.has(ps.pageNum - 1));
+  }
+  els.btnDeletePages.disabled = state.selectedPages.size === 0;
+}
+
+// Move `fromIdx` to just before `toIdx` in the display/export order, then
+// re-sync the DOM (both the main workspace and the thumbnail grid) to match.
+function reorderPage(fromIdx, toIdx) {
+  if (Number.isNaN(fromIdx) || fromIdx === toIdx) return;
+  const order = state.pageOrder;
+  const fromPos = order.indexOf(fromIdx);
+  if (fromPos === -1) return;
+  order.splice(fromPos, 1);
+  const toPos = order.indexOf(toIdx);
+  order.splice(toPos === -1 ? order.length : toPos, 0, fromIdx);
+  applyPageOrder();
+  markDirty();
+}
+
+// Reflect state.pageOrder in the DOM: reorders both the editable page
+// stack and the thumbnail grid, and renumbers the thumbnail labels.
+function applyPageOrder() {
+  state.pageOrder.forEach((origIdx, i) => {
+    const ps = state.pages[origIdx];
+    if (!ps) return;
+    els.pages.appendChild(ps.wrap);
+    els.pagesGrid.appendChild(ps.thumbEl);
+    if (ps.thumbLabelEl) ps.thumbLabelEl.textContent = String(i + 1);
+  });
+}
+
+function deleteSelectedPages() {
+  const toDelete = [...state.selectedPages];
+  if (!toDelete.length) return;
+  if (toDelete.length >= state.pageOrder.length) {
+    status("Can't delete every page — at least one page must remain.", true);
+    return;
+  }
+  const n = toDelete.length;
+  openConfirmModal(`Delete ${n} page${n > 1 ? 's' : ''}? This can't be undone.`, () => {
+    for (const origIdx of toDelete) {
+      const ps = state.pages[origIdx];
+      if (!ps) continue;
+      if (state.selected?.pageState === ps) selectItem(null);
+      ps.wrap.remove();
+      ps.thumbEl?.remove();
+      const pos = state.pageOrder.indexOf(origIdx);
+      if (pos !== -1) state.pageOrder.splice(pos, 1);
+    }
+    state.selectedPages.clear();
+    applyPageOrder();
+    refreshPageSelectionUI();
+    markDirty();
+    status(`Deleted ${n} page${n > 1 ? 's' : ''}.`);
+  });
+}
+
+// ---------- confirm modal ----------
+
+let confirmCallback = null;
+
+function openConfirmModal(message, onConfirm) {
+  els.confirmText.textContent = message;
+  confirmCallback = onConfirm;
+  els.confirmModal.hidden = false;
+}
+
+function closeConfirmModal() {
+  els.confirmModal.hidden = true;
+  confirmCallback = null;
+}
+
+// ---------- autosave / draft restore ----------
+
+const ITEM_FIELDS = [
+  'id', 'str', 'original', 'x', 'y', 'ox', 'oy', 'osize', 'owidth', 'size', 'width',
+  'fontId', 'bold', 'italic', 'color', 'edited', 'deleted', 'isNew', 'fontRaw',
+];
+
+function serializeItem(it) {
+  const out = {};
+  for (const k of ITEM_FIELDS) if (k in it) out[k] = it[k];
+  return out;
+}
+
+function buildDraftSnapshot() {
+  return {
+    fileName: state.fileName,
+    pdfBytes: state.pdfBytes,
+    pageOrder: state.pageOrder.slice(),
+    pages: state.pages.map((ps) => ({
+      items: ps.items.map(serializeItem),
+      newBoxes: ps.newBoxes.map(serializeItem),
+    })),
+    savedAt: Date.now(),
+  };
+}
+
+let autosaveDirty = false;
+
+function markDirty() { autosaveDirty = true; }
+
+async function flushAutosave() {
+  if (!autosaveDirty || !state.pdfBytes) return;
+  autosaveDirty = false;
+  try {
+    els.autosaveIndicator.textContent = 'Saving…';
+    await saveDraft(buildDraftSnapshot());
+    els.autosaveIndicator.textContent = 'Saved';
+    clearTimeout(flushAutosave._fadeTimer);
+    flushAutosave._fadeTimer = setTimeout(() => { els.autosaveIndicator.textContent = ''; }, 2500);
+  } catch (err) {
+    console.warn('Autosave failed', err);
+    els.autosaveIndicator.textContent = '';
+  }
+}
+
+setInterval(flushAutosave, 2000);
+window.addEventListener('beforeunload', () => {
+  if (state.selected) commitEdit(state.selected);
+  flushAutosave();
+});
+
+let pendingDraft = null;
+
+function hideRestoreBanner() {
+  els.restoreBanner.hidden = true;
+  pendingDraft = null;
+}
+
+function showRestoreBanner(draft) {
+  pendingDraft = draft;
+  const when = new Date(draft.savedAt).toLocaleString();
+  els.restoreBannerText.textContent = `Restore unsaved changes to "${draft.fileName}"? (autosaved ${when})`;
+  els.restoreBanner.hidden = false;
+}
+
+async function checkForDraft() {
+  try {
+    const draft = await loadDraft();
+    if (draft?.pdfBytes && draft.fileName) showRestoreBanner(draft);
+  } catch (err) {
+    console.warn('Could not check for a saved draft', err);
+  }
+}
+
+async function restoreDraft(draft) {
+  status(`Restoring ${draft.fileName}…`);
+  const bytes = draft.pdfBytes instanceof Uint8Array ? draft.pdfBytes : new Uint8Array(draft.pdfBytes);
+  state.fileName = draft.fileName;
+  state.pdfBytes = bytes;
+  state.pages = [];
+  state.detectedFonts = new Map();
+  state.selected = null;
+  history.undo.length = 0;
+  history.redo.length = 0;
+  updateUndoButtons();
+  state.clipboard = null;
+  state.pageOrder = [];
+  state.selectedPages.clear();
+  lastClickedPage = null;
+  els.pages.innerHTML = '';
+  els.pagesGrid.innerHTML = '';
+  els.btnDeletePages.disabled = true;
+
+  try {
+    state.pdfDoc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+  } catch (err) {
+    status(`Could not restore draft: ${err.message}`, true);
+    return;
+  }
+
+  els.dropzone.classList.add('hidden');
+  els.pagesPanelHint.hidden = true;
+  for (let p = 1; p <= state.pdfDoc.numPages; p++) {
+    await renderPage(p);
+  }
+
+  // Overlay the saved edits onto the freshly extracted (unedited) items.
+  let maxId = state.nextId;
+  state.pages.forEach((ps, idx) => {
+    const saved = draft.pages?.[idx];
+    if (!saved) return;
+    if (saved.items?.length === ps.items.length) {
+      ps.items.forEach((item, i) => {
+        Object.assign(item, saved.items[i]);
+        maxId = Math.max(maxId, item.id + 1);
+        positionEl(ps, item, item.el);
+        refreshItemView(item);
+      });
+    }
+    for (const nb of saved.newBoxes || []) {
+      const item = { ...nb };
+      maxId = Math.max(maxId, item.id + 1);
+      ps.newBoxes.push(item);
+      mountItem(ps, item);
+    }
+  });
+  state.nextId = maxId;
+
+  state.pageOrder = Array.isArray(draft.pageOrder) && draft.pageOrder.length === state.pages.length
+    ? draft.pageOrder.slice()
+    : state.pages.map((_, i) => i);
+  applyPageOrder();
+
+  els.btnExport.disabled = false;
+  els.btnAddText.disabled = false;
+  els.btnZoomIn.disabled = state.zoomIdx === ZOOM_LEVELS.length - 1;
+  els.btnZoomOut.disabled = state.zoomIdx === 0;
+  renderFontReport();
+  status(`Restored your previous session for ${draft.fileName}.`);
 }
 
 // Position an item's editable div over its rendered text.
@@ -318,6 +634,7 @@ function pushHistory(item, before, kind) {
   }
   history.redo.length = 0;
   updateUndoButtons();
+  markDirty();
 }
 
 function restore(item, snap) {
@@ -327,6 +644,7 @@ function restore(item, snap) {
   if (state.selected === item && !item.deleted) selectItem(item); // sync toolbar
   else if (state.selected === item) selectItem(null);
   updateHandle();
+  markDirty();
 }
 
 function undo() {
@@ -647,6 +965,7 @@ function duplicateFrom(snap, pageState, offsetSteps = 1) {
   history.undo.push({ item, before: { ...snapshot(item), deleted: true }, after: snapshot(item), at: Date.now() });
   history.redo.length = 0;
   updateUndoButtons();
+  markDirty();
   return item;
 }
 
@@ -757,6 +1076,7 @@ async function doExport() {
     }));
     const { bytes, fallbacks, warnings, linkCount } = await exportPdf(state.pdfBytes, pagesState, {
       linkify: els.ctlLinks.checked,
+      pageOrder: state.pageOrder,
     });
     const blob = new Blob([bytes], { type: 'application/pdf' });
     const a = document.createElement('a');
@@ -818,6 +1138,26 @@ function init() {
 
   els.btnAddText.addEventListener('click', () => setAddTextMode(!state.addTextMode));
   els.btnExport.addEventListener('click', doExport);
+  els.btnDeletePages.addEventListener('click', deleteSelectedPages);
+  els.confirmCancel.addEventListener('click', closeConfirmModal);
+  els.confirmOk.addEventListener('click', () => {
+    const cb = confirmCallback;
+    closeConfirmModal();
+    cb?.();
+  });
+  els.confirmModal.addEventListener('click', (e) => {
+    if (e.target === els.confirmModal) closeConfirmModal();
+  });
+
+  els.btnRestore.addEventListener('click', async () => {
+    const draft = pendingDraft;
+    hideRestoreBanner();
+    if (draft) await restoreDraft(draft);
+  });
+  els.btnDiscardDraft.addEventListener('click', async () => {
+    hideRestoreBanner();
+    await clearDraft();
+  });
   els.ctlLinks.checked = localStorage.getItem('linkify') !== '0';
   els.ctlLinks.addEventListener('change', () => localStorage.setItem('linkify', els.ctlLinks.checked ? '1' : '0'));
 
@@ -852,6 +1192,10 @@ function init() {
   });
 
   document.addEventListener('keydown', (e) => {
+    if (!els.confirmModal.hidden) {
+      if (e.key === 'Escape') { e.preventDefault(); closeConfirmModal(); }
+      return;
+    }
     const active = document.activeElement;
     // Inside a text edit or toolbar field, leave all keys to the browser
     // (native text undo, cursor movement, copy/paste of characters).
@@ -874,3 +1218,4 @@ function init() {
 }
 
 init();
+checkForDraft();

@@ -35,24 +35,55 @@
       <label id="ctl-links-label" class="checkbox" title="Make URLs and emails clickable in the exported PDF (no visual change)">
         <input type="checkbox" id="ctl-links" checked /> Clickable links
       </label>
+      <span id="autosave-indicator" title="Local autosave status"></span>
       <button id="btn-export" class="btn primary" disabled>Export PDF</button>
     </div>
   </header>
 
-  <div id="font-report" hidden></div>
-
-  <main id="workspace">
-    <div id="dropzone">
-      <div class="dz-inner">
-        <div class="dz-icon">&#128196;</div>
-        <p><strong>Drop a PDF here</strong></p>
-        <p class="dz-sub">or use "Select file" above</p>
+  <div id="body-row">
+    <aside id="pages-panel">
+      <div class="pages-panel-header">
+        <span>Pages</span>
+        <button id="btn-delete-pages" class="btn danger icon-trash" title="Delete selected pages" disabled>&#128465;</button>
       </div>
+      <div id="pages-grid"></div>
+      <p id="pages-panel-hint">Open a PDF to see its pages here. Drag to reorder, click to select.</p>
+    </aside>
+
+    <div id="main-col">
+      <div id="font-report" hidden></div>
+
+      <main id="workspace">
+        <div id="restore-banner" class="restore-banner" hidden>
+          <span id="restore-banner-text"></span>
+          <div class="restore-banner-actions">
+            <button id="btn-restore" class="btn primary">Restore</button>
+            <button id="btn-discard-draft" class="btn">Discard</button>
+          </div>
+        </div>
+        <div id="dropzone">
+          <div class="dz-inner">
+            <div class="dz-icon">&#128196;</div>
+            <p><strong>Drop a PDF here</strong></p>
+            <p class="dz-sub">or use "Select file" above</p>
+          </div>
+        </div>
+        <div id="pages"></div>
+      </main>
     </div>
-    <div id="pages"></div>
-  </main>
+  </div>
 
   <div id="status-bar"></div>
+
+  <div id="confirm-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <p id="confirm-modal-text"></p>
+      <div class="modal-actions">
+        <button id="confirm-cancel" class="btn">Cancel</button>
+        <button id="confirm-ok" class="btn danger">Delete</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="/src/main.js"></script>
 </body>

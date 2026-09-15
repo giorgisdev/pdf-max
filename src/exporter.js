@@ -181,12 +181,15 @@ function replacePageContent(doc, page, newBytes) {
  * @param pagesState     per-page: { items: [...], newBoxes: [...] }
  *   item: { str, x, y (PDF-space baseline), size, fontId, bold, italic,
  *           color, edited, deleted }
- * @param options        { linkify } — add invisible clickable link
- *   annotations over any URLs/emails found in the text (no visual change).
+ * @param options        { linkify, pageOrder } — linkify adds invisible
+ *   clickable link annotations over any URLs/emails found in the text (no
+ *   visual change). pageOrder, if given, is the final list of original
+ *   (0-based) page indices to keep, in the desired output order — pages
+ *   omitted are deleted, and the rest are reordered to match.
  * Returns { bytes, fallbacks, warnings, linkCount }
  */
 export async function exportPdf(originalBytes, pagesState, options = {}) {
-  const { linkify = false } = options;
+  const { linkify = false, pageOrder = null } = options;
   const doc = await PDFDocument.load(originalBytes, { ignoreEncryption: true });
   doc.registerFontkit(fontkit);
   const pool = new FontPool(doc);
@@ -195,6 +198,7 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
   const pages = doc.getPages();
 
   for (let p = 0; p < pages.length; p++) {
+    if (pageOrder && !pageOrder.includes(p)) continue; // deleted page — skip entirely
     const page = pages[p];
     const state = pagesState[p];
     if (!state) continue;
@@ -251,6 +255,14 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
         }
       }
     }
+  }
+
+  if (pageOrder) {
+    // Detach every page from the tree, then reattach the kept ones in the
+    // requested order — reordering/deleting doesn't touch page content or
+    // annotations, since it's the same PDFPage objects moving, not copies.
+    for (let i = pages.length - 1; i >= 0; i--) doc.removePage(i);
+    pageOrder.forEach((origIdx, i) => doc.insertPage(i, pages[origIdx]));
   }
 
   const bytes = await doc.save();

@@ -215,6 +215,8 @@ label.checkbox input { accent-color: #2557d6; cursor: pointer; }
 .page canvas { display: block; }
 .overlay { position: absolute; inset: 0; }
 body.add-text-cursor .overlay { cursor: crosshair; }
+body.format-painter-cursor .overlay,
+body.format-painter-cursor .text-item:not(.editing) { cursor: copy; }
 
 .text-item {
   position: absolute;

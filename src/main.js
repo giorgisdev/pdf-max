@@ -29,6 +29,7 @@ const state = {
   pasteCount: 0,
   pageOrder: [],         // original (0-based) page indices, in current display/export order
   selectedPages: new Set(), // original page indices selected in the pages panel
+  formatPainter: null,   // { fontId, size, bold, italic, color, sticky } while active
 };
 let lastClickedPage = null; // shift-click range anchor for the pages panel
 
@@ -41,7 +42,7 @@ const els = {
   ctlDelete: $('ctl-delete'), fontReport: $('font-report'), statusBar: $('status-bar'),
   btnUndo: $('btn-undo'), btnRedo: $('btn-redo'),
   btnZoomIn: $('btn-zoom-in'), btnZoomOut: $('btn-zoom-out'), zoomLabel: $('zoom-label'),
-  ctlDuplicate: $('ctl-duplicate'), ctlLinks: $('ctl-links'),
+  ctlDuplicate: $('ctl-duplicate'), ctlLinks: $('ctl-links'), ctlFormatPainter: $('ctl-format-painter'),
   pagesGrid: $('pages-grid'), pagesPanelHint: $('pages-panel-hint'), btnDeletePages: $('btn-delete-pages'),
   confirmModal: $('confirm-modal'), confirmText: $('confirm-modal-text'),
   confirmCancel: $('confirm-cancel'), confirmOk: $('confirm-ok'),
@@ -65,6 +66,9 @@ function cssFontFor(item) {
 // ---------- file loading ----------
 
 async function loadFile(file) {
+  // Set before any await: blocks the async draft check (still in flight from
+  // startup) from re-showing the banner after the user has already moved on.
+  draftPromptSuppressed = true;
   if (!file || !/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') {
     status('Please choose a PDF file.', true);
     return;
@@ -81,6 +85,7 @@ async function loadFile(file) {
   history.redo.length = 0;
   updateUndoButtons();
   state.clipboard = null;
+  stopFormatPainter();
   state.pageOrder = [];
   state.selectedPages.clear();
   lastClickedPage = null;
@@ -260,7 +265,9 @@ async function renderPage(pageNum) {
 
   overlay.addEventListener('mousedown', (e) => {
     if (e.target !== overlay) return;
-    if (state.addTextMode) {
+    if (state.formatPainter) {
+      stopFormatPainter();
+    } else if (state.addTextMode) {
       e.preventDefault();
       addTextBoxAt(pageState, e);
     } else {
@@ -479,6 +486,9 @@ window.addEventListener('beforeunload', () => {
 });
 
 let pendingDraft = null;
+// True once the user has taken any action (loaded a file, restored, or
+// discarded) that makes the startup draft check's result stale.
+let draftPromptSuppressed = false;
 
 function hideRestoreBanner() {
   els.restoreBanner.hidden = true;
@@ -486,6 +496,7 @@ function hideRestoreBanner() {
 }
 
 function showRestoreBanner(draft) {
+  if (draftPromptSuppressed) return; // user already moved on before this resolved
   pendingDraft = draft;
   const when = new Date(draft.savedAt).toLocaleString();
   els.restoreBannerText.textContent = `Restore unsaved changes to "${draft.fileName}"? (autosaved ${when})`;
@@ -513,6 +524,7 @@ async function restoreDraft(draft) {
   history.redo.length = 0;
   updateUndoButtons();
   state.clipboard = null;
+  stopFormatPainter();
   state.pageOrder = [];
   state.selectedPages.clear();
   lastClickedPage = null;
@@ -595,6 +607,11 @@ function mountItem(pageState, item) {
   // Mousedown starts a potential drag; a "click" (no real movement) edits.
   el.addEventListener('mousedown', (e) => {
     e.stopPropagation();
+    if (state.formatPainter) {
+      e.preventDefault();
+      applyFormatPainter(item);
+      return;
+    }
     if (state.addTextMode) return;
     if (el.classList.contains('editing')) return; // let text selection work
     e.preventDefault();
@@ -946,6 +963,48 @@ function applyStyleChange(mutate) {
   pushHistory(item, before);
 }
 
+// ---------- format painter ----------
+
+// Copy the selected item's style (font, size, bold, italic, color) and apply
+// it to whatever's clicked next — like Word/Docs' paintbrush. A plain click
+// on the toolbar button is a one-shot painter; double-click makes it sticky
+// (keeps painting until toggled off or Escape).
+function startFormatPainter(sticky) {
+  const src = state.selected;
+  if (!src) return;
+  state.formatPainter = {
+    fontId: src.fontId, size: src.size, bold: src.bold, italic: src.italic, color: src.color,
+    sticky,
+  };
+  els.ctlFormatPainter.classList.add('active');
+  document.body.classList.add('format-painter-cursor');
+}
+
+function stopFormatPainter() {
+  if (!state.formatPainter) return;
+  state.formatPainter = null;
+  els.ctlFormatPainter.classList.remove('active');
+  document.body.classList.remove('format-painter-cursor');
+}
+
+function applyFormatPainter(item) {
+  const fp = state.formatPainter;
+  if (!fp) return;
+  const before = snapshot(item);
+  item.fontId = fp.fontId;
+  item.size = fp.size;
+  item.bold = fp.bold;
+  item.italic = fp.italic;
+  item.color = fp.color;
+  item.edited = !item.isNew;
+  positionEl(item.pageState, item, item.el);
+  refreshItemView(item);
+  if (state.selected === item) selectItem(item); // sync toolbar controls
+  updateHandle();
+  pushHistory(item, before);
+  if (!fp.sticky) stopFormatPainter();
+}
+
 // ---------- duplicate & nudge ----------
 
 // Clone an item (style + text) as a new text box slightly below the source.
@@ -1150,11 +1209,13 @@ function init() {
   });
 
   els.btnRestore.addEventListener('click', async () => {
+    draftPromptSuppressed = true;
     const draft = pendingDraft;
     hideRestoreBanner();
     if (draft) await restoreDraft(draft);
   });
   els.btnDiscardDraft.addEventListener('click', async () => {
+    draftPromptSuppressed = true;
     hideRestoreBanner();
     await clearDraft();
   });
@@ -1187,6 +1248,13 @@ function init() {
   els.btnRedo.addEventListener('click', redo);
   els.btnZoomIn.addEventListener('click', () => setZoom(state.zoomIdx + 1));
   els.btnZoomOut.addEventListener('click', () => setZoom(state.zoomIdx - 1));
+  els.ctlFormatPainter.addEventListener('click', () => {
+    if (state.formatPainter) stopFormatPainter();
+    else startFormatPainter(false);
+  });
+  els.ctlFormatPainter.addEventListener('dblclick', () => {
+    startFormatPainter(true);
+  });
   els.ctlDuplicate.addEventListener('click', () => {
     if (state.selected) { copySelected(); pasteClipboard(); }
   });
@@ -1200,6 +1268,8 @@ function init() {
     // Inside a text edit or toolbar field, leave all keys to the browser
     // (native text undo, cursor movement, copy/paste of characters).
     if (active?.isContentEditable || active?.tagName === 'INPUT' || active?.tagName === 'SELECT') return;
+
+    if (e.key === 'Escape' && state.formatPainter) { e.preventDefault(); stopFormatPainter(); return; }
 
     if (e.metaKey || e.ctrlKey) {
       const k = e.key.toLowerCase();

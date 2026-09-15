@@ -48,6 +48,9 @@ body {
 .btn.icon { font-size: 16px; line-height: 1; padding: 5px 10px; }
 #zoom-label { font-size: 12.5px; color: #445; min-width: 38px; text-align: center; }
 
+label.checkbox { display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: #445; cursor: pointer; user-select: none; white-space: nowrap; }
+label.checkbox input { accent-color: #2557d6; cursor: pointer; }
+
 #ctl-font { padding: 5px 6px; border-radius: 6px; border: 1px solid #c8ccd2; font-size: 13px; }
 #ctl-size { width: 62px; padding: 5px 6px; border-radius: 6px; border: 1px solid #c8ccd2; font-size: 13px; }
 #ctl-color { width: 34px; height: 30px; padding: 2px; border: 1px solid #c8ccd2; border-radius: 6px; background: #fff; }
@@ -65,6 +68,15 @@ body {
 #font-report ul { margin: 6px 0 0; padding-left: 18px; }
 #font-report .ok { color: #1e7d3e; }
 #font-report .warn { color: #a05a00; }
+#font-report li[data-raw] { cursor: default; border-radius: 4px; padding: 1px 4px; margin-left: -4px; }
+#font-report li[data-raw]:hover { background: rgba(160, 90, 0, 0.12); }
+
+/* Boxes using the hovered detected font */
+.text-item.font-hl {
+  outline: 2px solid #e8a000;
+  background: rgba(255, 196, 0, 0.22);
+}
+.text-item.masked.font-hl { background: #fff3d6; }
 
 #workspace { flex: 1; padding: 16px; overflow: auto; }
 

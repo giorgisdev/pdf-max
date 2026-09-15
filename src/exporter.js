@@ -1,5 +1,5 @@
 import {
-  PDFDocument, PDFName, PDFRawStream, PDFArray, PDFRef,
+  PDFDocument, PDFName, PDFRawStream, PDFArray, PDFRef, PDFString,
   decodePDFRawStream, rgb,
 } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
@@ -82,6 +82,69 @@ function drawTextSafe(page, text, opts, font) {
   return false;
 }
 
+// URLs and emails worth making clickable in a resume: explicit http(s),
+// www.-prefixed, emails, or bare domains like linkedin.com/in/name.
+const LINK_RE = /(https?:\/\/[^\s|•]+|www\.[^\s|•]+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+|(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|me|co|ca|ai|app|sh|gg|xyz|edu)(?:\/[^\s|•]*)?)/gi;
+
+function findLinks(str) {
+  const out = [];
+  for (const m of str.matchAll(LINK_RE)) {
+    let text = m[0].replace(/[.,;:)\]}>'"]+$/, ''); // trailing punctuation isn't part of the link
+    if (!text) continue;
+    let uri;
+    if (/^[\w.+-]+@/.test(text) && !/^https?:\/\//i.test(text)) uri = `mailto:${text}`;
+    else if (/^https?:\/\//i.test(text)) uri = text;
+    else uri = `https://${text}`;
+    out.push({ start: m.index, end: m.index + text.length, uri });
+  }
+  return out;
+}
+
+function widthOf(font, text, size, fullStr, fullWidth) {
+  try {
+    return font.widthOfTextAtSize(text, size);
+  } catch {
+    // Unencodable chars: fall back to a proportional share of the run's width.
+    return fullStr.length ? (text.length / fullStr.length) * fullWidth : 0;
+  }
+}
+
+function addLinkAnnotation(doc, page, rect, uri) {
+  const annot = doc.context.obj({
+    Type: 'Annot',
+    Subtype: 'Link',
+    Rect: rect,
+    Border: [0, 0, 0], // no visible border — text looks unchanged
+    A: { Type: 'Action', S: 'URI', URI: PDFString.of(uri) },
+  });
+  const ref = doc.context.register(annot);
+  const existing = page.node.lookup(PDFName.of('Annots'));
+  if (existing instanceof PDFArray) {
+    existing.push(ref);
+  } else {
+    page.node.set(PDFName.of('Annots'), doc.context.obj([ref]));
+  }
+}
+
+// Add invisible link annotations over every URL/email in a text run.
+// `estWidth` is the best known rendered width of the full run (for fallback).
+async function linkifyRun(doc, page, pool, run, str, x, y, estWidth) {
+  const links = findLinks(str);
+  if (!links.length) return 0;
+  const font = await pool.get(run.fontId, run.bold, run.italic);
+  const size = run.size;
+  let added = 0;
+  for (const { start, end, uri } of links) {
+    const xStart = x + widthOf(font, str.slice(0, start), size, str, estWidth);
+    const w = widthOf(font, str.slice(start, end), size, str, estWidth);
+    if (w <= 0) continue;
+    // y is the text baseline; pad down to the descender and up past the ascender.
+    addLinkAnnotation(doc, page, [xStart, y - size * 0.25, xStart + w, y + size * 0.95], uri);
+    added++;
+  }
+  return added;
+}
+
 function collectContentBytes(doc, page) {
   const contentsRef = page.node.get(PDFName.of('Contents'));
   const resolved = contentsRef instanceof PDFRef ? doc.context.lookup(contentsRef) : contentsRef;
@@ -118,13 +181,17 @@ function replacePageContent(doc, page, newBytes) {
  * @param pagesState     per-page: { items: [...], newBoxes: [...] }
  *   item: { str, x, y (PDF-space baseline), size, fontId, bold, italic,
  *           color, edited, deleted }
- * Returns { bytes, fallbacks, warnings }
+ * @param options        { linkify } — add invisible clickable link
+ *   annotations over any URLs/emails found in the text (no visual change).
+ * Returns { bytes, fallbacks, warnings, linkCount }
  */
-export async function exportPdf(originalBytes, pagesState) {
+export async function exportPdf(originalBytes, pagesState, options = {}) {
+  const { linkify = false } = options;
   const doc = await PDFDocument.load(originalBytes, { ignoreEncryption: true });
   doc.registerFontkit(fontkit);
   const pool = new FontPool(doc);
   const warnings = [];
+  let linkCount = 0;
   const pages = doc.getPages();
 
   for (let p = 0; p < pages.length; p++) {
@@ -169,8 +236,23 @@ export async function exportPdf(originalBytes, pagesState) {
         }, font);
       });
     }
+
+    if (linkify) {
+      for (const it of state.items) {
+        if (it.deleted || !it.str) continue;
+        linkCount += await linkifyRun(doc, page, pool, it, it.str, it.x, it.y, it.width || 0);
+      }
+      for (const box of state.newBoxes) {
+        if (box.deleted || !box.str) continue;
+        const lines = box.str.split('\n');
+        for (let li = 0; li < lines.length; li++) {
+          if (!lines[li].trim()) continue;
+          linkCount += await linkifyRun(doc, page, pool, box, lines[li], box.x, box.y - li * box.size * 1.25, box.width || 0);
+        }
+      }
+    }
   }
 
   const bytes = await doc.save();
-  return { bytes, fallbacks: pool.fallbacks, warnings };
+  return { bytes, fallbacks: pool.fallbacks, warnings, linkCount };
 }

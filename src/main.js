@@ -33,7 +33,7 @@ const els = {
   ctlDelete: $('ctl-delete'), fontReport: $('font-report'), statusBar: $('status-bar'),
   btnUndo: $('btn-undo'), btnRedo: $('btn-redo'),
   btnZoomIn: $('btn-zoom-in'), btnZoomOut: $('btn-zoom-out'), zoomLabel: $('zoom-label'),
-  ctlDuplicate: $('ctl-duplicate'),
+  ctlDuplicate: $('ctl-duplicate'), ctlLinks: $('ctl-links'),
 };
 
 // ---------- helpers ----------
@@ -149,6 +149,7 @@ async function extractItems(page) {
         x: m.x, y: m.y, ox: m.x, oy: m.y, osize: m.size, owidth: m.width,
         size: m.size, width: m.width,
         fontId: det.fontId, bold: det.bold, italic: det.italic,
+        fontRaw: cleanFontName(m.fontRaw),
         color: '#000000',
         edited: false, deleted: false, isNew: false,
       };
@@ -714,18 +715,29 @@ function renderFontReport() {
     const style = styleKey(det.bold, det.italic);
     const styles = state.fontAvailability[det.fontId] || {};
     const target = `${entry.label}${style !== 'regular' ? ` (${style})` : ''}`;
+    const attr = `data-raw="${rawName.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`;
     if (styles[style]) {
-      lines.push(`<li><b>${rawName}</b> → ${target} <span class="ok">bundled font file</span></li>`);
+      lines.push(`<li ${attr}><b>${rawName}</b> → ${target} <span class="ok">bundled font file</span></li>`);
     } else if (styles.regular) {
-      lines.push(`<li><b>${rawName}</b> → ${target} <span class="warn">no ${style} file — will export with the regular weight file</span></li>`);
+      lines.push(`<li ${attr}><b>${rawName}</b> → ${target} <span class="warn">no ${style} file — will export with the regular weight file</span></li>`);
     } else {
       const std = entry.std?.[style] || entry.std?.regular;
-      lines.push(`<li><b>${rawName}</b> → ${target} <span class="warn">no font file in /public/fonts — will export with standard ${std}</span></li>`);
+      lines.push(`<li ${attr}><b>${rawName}</b> → ${target} <span class="warn">no font file in /public/fonts — will export with standard ${std}</span></li>`);
     }
   }
   if (!lines.length) { els.fontReport.hidden = true; return; }
   els.fontReport.hidden = false;
   els.fontReport.innerHTML = `<strong>Detected fonts</strong><ul>${lines.join('')}</ul>`;
+}
+
+// Highlight every text box using `raw` (a cleaned embedded font name), or
+// clear all highlights when raw is null.
+function setFontHighlight(raw) {
+  for (const ps of state.pages) {
+    for (const it of ps.items) {
+      it.el?.classList.toggle('font-hl', !!raw && !it.deleted && it.fontRaw === raw);
+    }
+  }
 }
 
 // ---------- export ----------
@@ -739,7 +751,9 @@ async function doExport() {
     const pagesState = state.pages.map((p) => ({
       items: p.items, newBoxes: p.newBoxes,
     }));
-    const { bytes, fallbacks, warnings } = await exportPdf(state.pdfBytes, pagesState);
+    const { bytes, fallbacks, warnings, linkCount } = await exportPdf(state.pdfBytes, pagesState, {
+      linkify: els.ctlLinks.checked,
+    });
     const blob = new Blob([bytes], { type: 'application/pdf' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -750,7 +764,8 @@ async function doExport() {
     const notes = [];
     for (const f of fallbacks) notes.push(`Font fallback: ${f.requested} → ${f.used}`);
     notes.push(...warnings);
-    status(notes.length ? notes.join(' • ') : 'Exported — text is fully selectable.');
+    const linkNote = els.ctlLinks.checked ? ` ${linkCount} clickable link${linkCount === 1 ? '' : 's'} added.` : '';
+    status(notes.length ? notes.join(' • ') + linkNote : `Exported — text is fully selectable.${linkNote}`);
     if (notes.length) console.warn(notes.join('\n'));
   } catch (err) {
     console.error(err);
@@ -779,20 +794,28 @@ function init() {
   els.btnOpen.addEventListener('click', () => els.fileInput.click());
   els.fileInput.addEventListener('change', () => loadFile(els.fileInput.files[0]));
 
+  // Register drag & drop on body only — a drop on the dropzone bubbles up to
+  // body, so listening on both fired loadFile twice (pages rendered twice).
   const dz = els.dropzone;
-  for (const target of [dz, document.body]) {
-    target.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('dragging'); });
-    target.addEventListener('dragleave', () => dz.classList.remove('dragging'));
-    target.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dz.classList.remove('dragging');
-      const file = e.dataTransfer.files?.[0];
-      if (file) loadFile(file);
-    });
-  }
+  document.body.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('dragging'); });
+  document.body.addEventListener('dragleave', () => dz.classList.remove('dragging'));
+  document.body.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dz.classList.remove('dragging');
+    const file = e.dataTransfer.files?.[0];
+    if (file) loadFile(file);
+  });
+
+  els.fontReport.addEventListener('mouseover', (e) => {
+    const li = e.target.closest('li[data-raw]');
+    setFontHighlight(li ? li.dataset.raw : null);
+  });
+  els.fontReport.addEventListener('mouseleave', () => setFontHighlight(null));
 
   els.btnAddText.addEventListener('click', () => setAddTextMode(!state.addTextMode));
   els.btnExport.addEventListener('click', doExport);
+  els.ctlLinks.checked = localStorage.getItem('linkify') !== '0';
+  els.ctlLinks.addEventListener('change', () => localStorage.setItem('linkify', els.ctlLinks.checked ? '1' : '0'));
 
   els.ctlFont.addEventListener('change', () => applyStyleChange((it) => { it.fontId = els.ctlFont.value; }));
   els.ctlSize.addEventListener('change', () => applyStyleChange((it) => { it.size = Math.max(4, parseFloat(els.ctlSize.value) || it.size); }));

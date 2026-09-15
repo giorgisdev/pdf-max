@@ -4,8 +4,12 @@ import {
   FONTS, DEFAULT_FONT_ID, detectFont, cleanFontName, checkFontAvailability, styleKey,
 } from './fonts.js';
 import { exportPdf } from './exporter.js';
+import { inject } from '@vercel/analytics';
+
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+
+inject();
 
 // ---------- state ----------
 

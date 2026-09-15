@@ -48,7 +48,7 @@ const els = {
   confirmCancel: $('confirm-cancel'), confirmOk: $('confirm-ok'),
   autosaveIndicator: $('autosave-indicator'),
   restoreBanner: $('restore-banner'), restoreBannerText: $('restore-banner-text'),
-  btnRestore: $('btn-restore'), btnDiscardDraft: $('btn-discard-draft'),
+  btnDiscardDraft: $('btn-discard-draft'),
 };
 
 // ---------- helpers ----------
@@ -485,30 +485,69 @@ window.addEventListener('beforeunload', () => {
   flushAutosave();
 });
 
-let pendingDraft = null;
-// True once the user has taken any action (loaded a file, restored, or
-// discarded) that makes the startup draft check's result stale.
+// True once the user has taken any action (loaded a file or discarded a
+// draft) that makes the startup draft check's result stale.
 let draftPromptSuppressed = false;
+let restoredBannerTimer = null;
 
 function hideRestoreBanner() {
   els.restoreBanner.hidden = true;
-  pendingDraft = null;
+  clearTimeout(restoredBannerTimer);
 }
 
-function showRestoreBanner(draft) {
-  if (draftPromptSuppressed) return; // user already moved on before this resolved
-  pendingDraft = draft;
+// Shown briefly after an automatic restore, purely as an FYI — restoring
+// already happened, this just offers a quick way to bail out of it.
+function showRestoredNotice(draft) {
   const when = new Date(draft.savedAt).toLocaleString();
-  els.restoreBannerText.textContent = `Restore unsaved changes to "${draft.fileName}"? (autosaved ${when})`;
+  els.restoreBannerText.textContent = `Restored your previous session for "${draft.fileName}" (autosaved ${when}).`;
   els.restoreBanner.hidden = false;
+  clearTimeout(restoredBannerTimer);
+  restoredBannerTimer = setTimeout(hideRestoreBanner, 8000);
 }
 
+// Undo an automatic restore: wipe the stored draft and go back to the empty
+// dropzone, as if the app had just opened with no prior session.
+function discardDraftAndStartOver() {
+  draftPromptSuppressed = true;
+  hideRestoreBanner();
+  clearDraft().catch((err) => console.warn('Could not clear draft', err));
+  state.fileName = null;
+  state.pdfBytes = null;
+  state.pdfDoc = null;
+  state.pages = [];
+  state.detectedFonts = new Map();
+  state.selected = null;
+  history.undo.length = 0;
+  history.redo.length = 0;
+  updateUndoButtons();
+  state.clipboard = null;
+  stopFormatPainter();
+  state.pageOrder = [];
+  state.selectedPages.clear();
+  lastClickedPage = null;
+  els.pages.innerHTML = '';
+  els.pagesGrid.innerHTML = '';
+  els.btnDeletePages.disabled = true;
+  els.pagesPanelHint.hidden = false;
+  els.dropzone.classList.remove('hidden');
+  els.btnExport.disabled = true;
+  els.btnAddText.disabled = true;
+  els.fontReport.hidden = true;
+  status('Discarded — start fresh whenever you\'re ready.');
+}
+
+// Auto-restore on startup, Google-Docs style: no confirmation click needed.
+// If the user has already started loading their own file by the time this
+// resolves, draftPromptSuppressed blocks it from clobbering their choice.
 async function checkForDraft() {
   try {
     const draft = await loadDraft();
-    if (draft?.pdfBytes && draft.fileName) showRestoreBanner(draft);
+    if (draftPromptSuppressed || !draft?.pdfBytes || !draft.fileName) return;
+    await restoreDraft(draft);
+    if (draftPromptSuppressed) return; // user loaded something else mid-restore
+    showRestoredNotice(draft);
   } catch (err) {
-    console.warn('Could not check for a saved draft', err);
+    console.warn('Could not restore the saved draft', err);
   }
 }
 
@@ -577,7 +616,7 @@ async function restoreDraft(draft) {
   els.btnZoomIn.disabled = state.zoomIdx === ZOOM_LEVELS.length - 1;
   els.btnZoomOut.disabled = state.zoomIdx === 0;
   renderFontReport();
-  status(`Restored your previous session for ${draft.fileName}.`);
+  status(`Restored ${draft.fileName} — click any text to edit it.`);
 }
 
 // Position an item's editable div over its rendered text.
@@ -1208,17 +1247,7 @@ function init() {
     if (e.target === els.confirmModal) closeConfirmModal();
   });
 
-  els.btnRestore.addEventListener('click', async () => {
-    draftPromptSuppressed = true;
-    const draft = pendingDraft;
-    hideRestoreBanner();
-    if (draft) await restoreDraft(draft);
-  });
-  els.btnDiscardDraft.addEventListener('click', async () => {
-    draftPromptSuppressed = true;
-    hideRestoreBanner();
-    await clearDraft();
-  });
+  els.btnDiscardDraft.addEventListener('click', discardDraftAndStartOver);
   els.ctlLinks.checked = localStorage.getItem('linkify') !== '0';
   els.ctlLinks.addEventListener('change', () => localStorage.setItem('linkify', els.ctlLinks.checked ? '1' : '0'));
 

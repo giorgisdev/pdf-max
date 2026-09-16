@@ -172,6 +172,18 @@ function wrapText(font, text, size, maxWidth) {
   return lines;
 }
 
+// How far to shift a line's x start so it ends up left/center/right-aligned
+// within boxWidth, measured with the actual export font.
+function alignOffset(font, text, size, align, boxWidth) {
+  if (align !== 'center' && align !== 'right') return 0;
+  if (!boxWidth) return 0;
+  let textWidth;
+  try { textWidth = font.widthOfTextAtSize(text, size); } catch { return 0; }
+  const extra = boxWidth - textWidth;
+  if (extra <= 0) return 0;
+  return align === 'center' ? extra / 2 : extra;
+}
+
 // A new text box's raw '\n'-separated paragraphs, each word-wrapped to the
 // box's width.
 function wrapBoxLines(font, box) {
@@ -259,8 +271,9 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
         const text = it.str;
         if (!text || !text.trim()) continue;
         const font = await pool.get(it.fontId, it.bold, it.italic);
+        const x = it.x + alignOffset(font, text, it.size, it.align, it.width);
         const ok = drawTextSafe(page, text, {
-          x: it.x, y: it.y, size: it.size, font, color: hexToRgb(it.color),
+          x, y: it.y, size: it.size, font, color: hexToRgb(it.color),
         }, font);
         if (!ok) warnings.push(`Page ${p + 1}: some characters in "${text.slice(0, 30)}…" were substituted (not supported by the export font).`);
       }
@@ -272,8 +285,9 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
       const lines = wrapBoxLines(font, box);
       lines.forEach((line, li) => {
         if (!line.trim()) return;
+        const x = box.x + alignOffset(font, line, box.size, box.align, box.width);
         drawTextSafe(page, line, {
-          x: box.x, y: box.y - li * box.size * 1.25,
+          x, y: box.y - li * box.size * 1.25,
           size: box.size, font, color: hexToRgb(box.color),
         }, font);
       });
@@ -282,7 +296,9 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
     if (linkify) {
       for (const it of state.items) {
         if (it.deleted || !it.str) continue;
-        linkCount += await linkifyRun(doc, page, pool, it, it.str, it.x, it.y, it.width || 0);
+        const font = await pool.get(it.fontId, it.bold, it.italic);
+        const x = it.x + alignOffset(font, it.str, it.size, it.align, it.width);
+        linkCount += await linkifyRun(doc, page, pool, it, it.str, x, it.y, it.width || 0);
       }
       for (const box of state.newBoxes) {
         if (box.deleted || !box.str) continue;
@@ -290,7 +306,8 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
         const lines = wrapBoxLines(font, box);
         for (let li = 0; li < lines.length; li++) {
           if (!lines[li].trim()) continue;
-          linkCount += await linkifyRun(doc, page, pool, box, lines[li], box.x, box.y - li * box.size * 1.25, box.width || 0);
+          const x = box.x + alignOffset(font, lines[li], box.size, box.align, box.width);
+          linkCount += await linkifyRun(doc, page, pool, box, lines[li], x, box.y - li * box.size * 1.25, box.width || 0);
         }
       }
     }

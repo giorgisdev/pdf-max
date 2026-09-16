@@ -40,6 +40,7 @@ const els = {
   btnOpen: $('btn-open'), btnAddText: $('btn-add-text'), btnExport: $('btn-export'),
   controls: $('text-controls'), ctlFont: $('ctl-font'), ctlSize: $('ctl-size'),
   ctlBold: $('ctl-bold'), ctlItalic: $('ctl-italic'), ctlColor: $('ctl-color'),
+  ctlAlignLeft: $('ctl-align-left'), ctlAlignCenter: $('ctl-align-center'), ctlAlignRight: $('ctl-align-right'),
   ctlDelete: $('ctl-delete'), fontReport: $('font-report'), statusBar: $('status-bar'),
   multiSelectLabel: $('multi-select-label'),
   btnUndo: $('btn-undo'), btnRedo: $('btn-redo'),
@@ -179,7 +180,7 @@ async function extractItems(page) {
         size: m.size, width: m.width,
         fontId: det.fontId, bold: det.bold, italic: det.italic,
         fontRaw: cleanFontName(m.fontRaw),
-        color: '#000000',
+        color: '#000000', align: 'left',
         edited: false, deleted: false, isNew: false,
       };
     });
@@ -442,7 +443,7 @@ function closeConfirmModal() {
 
 const ITEM_FIELDS = [
   'id', 'str', 'original', 'x', 'y', 'ox', 'oy', 'osize', 'owidth', 'size', 'width',
-  'fontId', 'bold', 'italic', 'color', 'edited', 'deleted', 'isNew', 'fontRaw',
+  'fontId', 'bold', 'italic', 'color', 'align', 'edited', 'deleted', 'isNew', 'fontRaw',
 ];
 
 function serializeItem(it) {
@@ -646,6 +647,7 @@ function positionEl(pageState, item, el) {
   el.style.fontWeight = item.bold ? '700' : '400';
   el.style.fontStyle = item.italic ? 'italic' : 'normal';
   el.style.color = item.color;
+  el.style.textAlign = item.align || 'left';
 }
 
 function mountItem(pageState, item) {
@@ -694,7 +696,7 @@ function mountItem(pageState, item) {
 // ---------- undo / redo ----------
 
 const history = { undo: [], redo: [] };
-const SNAP_PROPS = ['str', 'x', 'y', 'size', 'width', 'fontId', 'bold', 'italic', 'color', 'edited', 'deleted'];
+const SNAP_PROPS = ['str', 'x', 'y', 'size', 'width', 'fontId', 'bold', 'italic', 'color', 'align', 'edited', 'deleted'];
 
 function snapshot(item) {
   const s = {};
@@ -1053,6 +1055,12 @@ function commitEdit(item) {
   }
 }
 
+function syncAlignButtons(align) {
+  els.ctlAlignLeft.classList.toggle('active', align === 'left' || !align);
+  els.ctlAlignCenter.classList.toggle('active', align === 'center');
+  els.ctlAlignRight.classList.toggle('active', align === 'right');
+}
+
 function selectItem(item) {
   if (state.selected?.el) state.selected.el.classList.remove('selected');
   state.selected = item;
@@ -1065,6 +1073,7 @@ function selectItem(item) {
   els.ctlBold.classList.toggle('active', item.bold);
   els.ctlItalic.classList.toggle('active', item.italic);
   els.ctlColor.value = item.color;
+  syncAlignButtons(item.align);
 }
 
 function applyStyleChange(mutate) {
@@ -1131,7 +1140,10 @@ function toggleMultiSelection(item) {
 // plus Duplicate/Delete, which stay meaningful for any-sized selection.
 function updateMultiSelectUI() {
   const n = state.multiSelected.size;
-  const soloControls = [els.ctlFont, els.ctlSize, els.ctlBold, els.ctlItalic, els.ctlColor, els.ctlFormatPainter];
+  const soloControls = [
+    els.ctlFont, els.ctlSize, els.ctlBold, els.ctlItalic, els.ctlColor, els.ctlFormatPainter,
+    els.ctlAlignLeft, els.ctlAlignCenter, els.ctlAlignRight,
+  ];
   if (n > 0) {
     els.controls.hidden = false;
     els.multiSelectLabel.hidden = false;
@@ -1205,7 +1217,7 @@ function startFormatPainter(sticky) {
   if (!src) return;
   state.formatPainter = {
     fontId: src.fontId, size: src.size, bold: src.bold, italic: src.italic, color: src.color,
-    sticky,
+    align: src.align, sticky,
   };
   els.ctlFormatPainter.classList.add('active');
   document.body.classList.add('format-painter-cursor');
@@ -1227,6 +1239,7 @@ function applyFormatPainter(item) {
   item.bold = fp.bold;
   item.italic = fp.italic;
   item.color = fp.color;
+  item.align = fp.align || 'left';
   item.edited = !item.isNew;
   positionEl(item.pageState, item, item.el);
   refreshItemView(item);
@@ -1251,6 +1264,7 @@ function duplicateFrom(snap, pageState, offsetSteps = 1) {
     // fit fine in the original.
     size: snap.size, width: (snap.width || 60) + 6,
     fontId: snap.fontId, bold: snap.bold, italic: snap.italic, color: snap.color,
+    align: snap.align || 'left',
     edited: false, deleted: false, isNew: true,
   };
   pageState.newBoxes.push(item);
@@ -1325,7 +1339,7 @@ function addTextBoxAt(pageState, e) {
     str: '', original: '',
     x: px, y: py, size: 11, width: 180,
     fontId: els.ctlFont.value || DEFAULT_FONT_ID,
-    bold: false, italic: false, color: '#000000',
+    bold: false, italic: false, color: '#000000', align: 'left',
     edited: false, deleted: false, isNew: true,
   };
   pageState.newBoxes.push(item);
@@ -1475,6 +1489,13 @@ function init() {
     els.ctlItalic.classList.toggle('active', state.selected?.italic);
   });
   els.ctlColor.addEventListener('input', () => applyStyleChange((it) => { it.color = els.ctlColor.value; }));
+  for (const btn of [els.ctlAlignLeft, els.ctlAlignCenter, els.ctlAlignRight]) {
+    btn.addEventListener('click', () => {
+      const align = btn.dataset.align;
+      applyStyleChange((it) => { it.align = align; });
+      syncAlignButtons(align);
+    });
+  }
   els.ctlDelete.addEventListener('click', deleteSelected);
 
   els.btnUndo.addEventListener('click', undo);

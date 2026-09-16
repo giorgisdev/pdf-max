@@ -24,6 +24,17 @@
       <input id="ctl-size" type="number" min="4" max="96" step="0.5" title="Font size" />
       <button id="ctl-bold" class="btn toggle" title="Bold"><b>B</b></button>
       <button id="ctl-italic" class="btn toggle" title="Italic"><i>I</i></button>
+      <div class="align-group" role="group" title="Text alignment">
+        <button id="ctl-align-left" class="btn toggle align-btn active" data-align="left" title="Align left">
+          <span class="align-icon align-left"><i></i><i></i><i></i></span>
+        </button>
+        <button id="ctl-align-center" class="btn toggle align-btn" data-align="center" title="Align center">
+          <span class="align-icon align-center"><i></i><i></i><i></i></span>
+        </button>
+        <button id="ctl-align-right" class="btn toggle align-btn" data-align="right" title="Align right">
+          <span class="align-icon align-right"><i></i><i></i><i></i></span>
+        </button>
+      </div>
       <input id="ctl-color" type="color" value="#000000" title="Text color" />
       <button id="ctl-format-painter" class="btn toggle" title="Format painter — click to copy style once, double-click to keep painting">&#128396;&#65039;</button>
       <button id="ctl-duplicate" class="btn" title="Duplicate (Cmd/Ctrl+C, Cmd/Ctrl+V)">Duplicate</button>

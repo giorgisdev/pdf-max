@@ -660,6 +660,7 @@ function mountItem(pageState, item) {
   // Mousedown starts a potential drag; a "click" (no real movement) edits.
   el.addEventListener('mousedown', (e) => {
     e.stopPropagation();
+    if (item.deleted) return; // ghost mask over old canvas text — inert
     if (state.formatPainter) {
       e.preventDefault();
       applyFormatPainter(item);
@@ -988,11 +989,13 @@ function positionMask(item) {
 function refreshItemView(item) {
   const el = item.el;
   if (item.deleted) {
-    el.classList.add('masked');
+    el.classList.add('masked', 'deleted');
     el.textContent = '';
     el.classList.remove('editing');
+    el.contentEditable = 'false';
     return;
   }
+  el.classList.remove('deleted');
   if (item.edited || item.isNew) {
     el.classList.add('masked');
     el.textContent = item.str;
@@ -1006,6 +1009,7 @@ function refreshItemView(item) {
 // ---------- editing ----------
 
 function beginEdit(item) {
+  if (item.deleted) return;
   if (state.selected && state.selected !== item) commitEdit(state.selected);
   selectItem(item);
   item.editSnapshot = snapshot(item);

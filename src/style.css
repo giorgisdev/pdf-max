@@ -221,6 +221,7 @@ body.format-painter-cursor .text-item:not(.editing) { cursor: copy; }
 
 .text-item {
   position: absolute;
+  z-index: 1;
   white-space: pre;
   line-height: 1.1;
   cursor: text;
@@ -233,8 +234,12 @@ body.format-painter-cursor .text-item:not(.editing) { cursor: copy; }
 .text-item.masked { background: #fff; color: inherit; }
 /* A deleted item's div stays in the DOM (it's masking the stale canvas text
    underneath), but it must be inert — otherwise clicking/dragging that
-   "ghost" box re-enters edit mode and resurrects the deleted text. */
-.text-item.deleted { pointer-events: none; cursor: default; }
+   "ghost" box re-enters edit mode and resurrects the deleted text. It also
+   must never sit visually above a live item — DOM order alone doesn't
+   guarantee that (an earlier-mounted item can be dragged on top of a
+   later-mounted deleted one), so pin it to the back of the stacking order.
+   Same reasoning applies to the stale-position mask left by a moved item. */
+.text-item.deleted { pointer-events: none; cursor: default; z-index: 0; }
 .text-item.selected { border-color: #2557d6; }
 .text-item.editing {
   outline: none;
@@ -292,6 +297,7 @@ body.format-painter-cursor .text-item:not(.editing) { cursor: copy; }
 
 .text-mask {
   position: absolute;
+  z-index: 0;
   background: #fff;
   pointer-events: none;
 }

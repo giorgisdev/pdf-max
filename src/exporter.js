@@ -56,18 +56,22 @@ function hexToRgb(hex) {
   return rgb(((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255);
 }
 
-// Some chars can't be encoded by every font (esp. standard WinAnsi fonts).
-// Try as-is, then with common substitutions, then strip unencodable chars.
+// Some chars can't be encoded by every font (esp. custom embedded resume
+// fonts, which often lack a bullet glyph). pdf-lib doesn't reliably throw for
+// this: a custom (fontkit) font commonly substitutes a silent .notdef glyph
+// instead of raising, so the exception-based fallback below never triggers
+// and a bullet bakes in as a broken glyph that PDF viewers show as "?". Try
+// the plain-ASCII substitution FIRST, since it's safe in every font, rather
+// than trusting a successful draw of the original as proof it rendered right.
 function drawTextSafe(page, text, opts, font) {
-  const attempts = [
-    text,
-    text
-      .replace(/[‘’‛]/g, "'")
-      .replace(/[“”‟]/g, '"')
-      .replace(/[–—]/g, '-')
-      .replace(/•/g, '*')
-      .replace(/ /g, ' '),
-  ];
+  const substituted = text
+    .replace(/[‘’‛]/g, "'")
+    .replace(/[“”‟]/g, '"')
+    .replace(/[–—]/g, '-')
+    .replace(/•/g, '*')
+    .replace(/…/g, '...')
+    .replace(/ /g, ' ');
+  const attempts = [substituted, text];
   for (const t of attempts) {
     try {
       page.drawText(t, opts);

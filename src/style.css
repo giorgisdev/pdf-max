@@ -52,6 +52,7 @@ label.checkbox { display: flex; align-items: center; gap: 5px; font-size: 12.5px
 label.checkbox input { accent-color: #2557d6; cursor: pointer; }
 
 #autosave-indicator { font-size: 12px; color: #8a93a0; min-width: 46px; white-space: nowrap; }
+#multi-select-label { font-size: 13px; color: #445; font-weight: 600; white-space: nowrap; padding-right: 4px; }
 
 .restore-banner {
   max-width: 880px;
@@ -239,7 +240,12 @@ body.format-painter-cursor .text-item:not(.editing) { cursor: copy; }
   box-shadow: 0 1px 6px rgba(37, 87, 214, 0.3);
   z-index: 5;
 }
-.text-item.new-box { min-width: 40px; }
+.text-item.new-box { min-width: 40px; white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word; }
+/* A new text box only ever has content you typed — no canvas text to hide
+   behind it, so once it's committed it should read as plain transparent
+   text, not a filled box. While actively typing it stays white (.editing
+   already sets that) so the caret and text stay legible mid-edit. */
+.text-item.new-box.masked:not(.editing) { background: transparent; }
 .text-item:not(.editing) { cursor: move; }
 .text-item.dragging { opacity: 0.85; z-index: 6; }
 
@@ -254,6 +260,21 @@ body.format-painter-cursor .text-item:not(.editing) { cursor: copy; }
   cursor: ns-resize;
   z-index: 7;
 }
+.resize-handle.width-handle { cursor: ew-resize; }
+
+.marquee-select {
+  position: absolute;
+  border: 1px solid #2557d6;
+  background: rgba(37, 87, 214, 0.1);
+  z-index: 9;
+  pointer-events: none;
+}
+
+.text-item.multi-selected {
+  border-color: #2557d6;
+  background: rgba(37, 87, 214, 0.12);
+}
+.text-item.new-box.multi-selected:not(.editing) { background: rgba(37, 87, 214, 0.12); }
 
 .snap-guide {
   position: absolute;

@@ -145,6 +145,40 @@ async function linkifyRun(doc, page, pool, run, str, x, y, estWidth) {
   return added;
 }
 
+// Greedy word-wrap a single paragraph (no literal newlines) to fit maxWidth,
+// measured with the actual export font/size — mirrors the editor's live
+// wrapping closely enough that resizing the box on screen matches export.
+function wrapText(font, text, size, maxWidth) {
+  if (!maxWidth || maxWidth <= 0) return [text];
+  const words = text.split(' ');
+  const lines = [];
+  let current = '';
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    let w;
+    try { w = font.widthOfTextAtSize(candidate, size); } catch { w = 0; }
+    if (w > maxWidth && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  lines.push(current);
+  return lines;
+}
+
+// A new text box's raw '\n'-separated paragraphs, each word-wrapped to the
+// box's width.
+function wrapBoxLines(font, box) {
+  const lines = [];
+  for (const para of box.str.split('\n')) {
+    if (!para.trim()) { lines.push(''); continue; }
+    lines.push(...wrapText(font, para, box.size, box.width));
+  }
+  return lines;
+}
+
 function collectContentBytes(doc, page) {
   const contentsRef = page.node.get(PDFName.of('Contents'));
   const resolved = contentsRef instanceof PDFRef ? doc.context.lookup(contentsRef) : contentsRef;
@@ -231,7 +265,7 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
     for (const box of state.newBoxes) {
       if (box.deleted || !box.str || !box.str.trim()) continue;
       const font = await pool.get(box.fontId, box.bold, box.italic);
-      const lines = box.str.split('\n');
+      const lines = wrapBoxLines(font, box);
       lines.forEach((line, li) => {
         if (!line.trim()) return;
         drawTextSafe(page, line, {
@@ -248,7 +282,8 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
       }
       for (const box of state.newBoxes) {
         if (box.deleted || !box.str) continue;
-        const lines = box.str.split('\n');
+        const font = await pool.get(box.fontId, box.bold, box.italic);
+        const lines = wrapBoxLines(font, box);
         for (let li = 0; li < lines.length; li++) {
           if (!lines[li].trim()) continue;
           linkCount += await linkifyRun(doc, page, pool, box, lines[li], box.x, box.y - li * box.size * 1.25, box.width || 0);

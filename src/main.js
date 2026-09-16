@@ -30,6 +30,7 @@ const state = {
   pageOrder: [],         // original (0-based) page indices, in current display/export order
   selectedPages: new Set(), // original page indices selected in the pages panel
   formatPainter: null,   // { fontId, size, bold, italic, color, sticky } while active
+  multiSelected: new Set(), // items rectangle-selected together (across items/newBoxes)
 };
 let lastClickedPage = null; // shift-click range anchor for the pages panel
 
@@ -40,6 +41,7 @@ const els = {
   controls: $('text-controls'), ctlFont: $('ctl-font'), ctlSize: $('ctl-size'),
   ctlBold: $('ctl-bold'), ctlItalic: $('ctl-italic'), ctlColor: $('ctl-color'),
   ctlDelete: $('ctl-delete'), fontReport: $('font-report'), statusBar: $('status-bar'),
+  multiSelectLabel: $('multi-select-label'),
   btnUndo: $('btn-undo'), btnRedo: $('btn-redo'),
   btnZoomIn: $('btn-zoom-in'), btnZoomOut: $('btn-zoom-out'), zoomLabel: $('zoom-label'),
   ctlDuplicate: $('ctl-duplicate'), ctlLinks: $('ctl-links'), ctlFormatPainter: $('ctl-format-painter'),
@@ -86,6 +88,7 @@ async function loadFile(file) {
   updateUndoButtons();
   state.clipboard = null;
   stopFormatPainter();
+  state.multiSelected.clear();
   state.pageOrder = [];
   state.selectedPages.clear();
   lastClickedPage = null;
@@ -271,7 +274,8 @@ async function renderPage(pageNum) {
       e.preventDefault();
       addTextBoxAt(pageState, e);
     } else {
-      selectItem(null);
+      e.preventDefault();
+      startMarqueeSelect(pageState, e);
     }
   });
 
@@ -522,6 +526,7 @@ function discardDraftAndStartOver() {
   updateUndoButtons();
   state.clipboard = null;
   stopFormatPainter();
+  state.multiSelected.clear();
   state.pageOrder = [];
   state.selectedPages.clear();
   lastClickedPage = null;
@@ -564,6 +569,7 @@ async function restoreDraft(draft) {
   updateUndoButtons();
   state.clipboard = null;
   stopFormatPainter();
+  state.multiSelected.clear();
   state.pageOrder = [];
   state.selectedPages.clear();
   lastClickedPage = null;
@@ -626,7 +632,15 @@ function positionEl(pageState, item, el) {
   el.style.left = `${vx}px`;
   el.style.top = `${vy - fontPx * 0.88}px`;
   el.style.fontSize = `${fontPx}px`;
-  el.style.minWidth = `${Math.max(item.width * pageState.scale, fontPx)}px`;
+  if (item.isNew) {
+    // A real box with a set width, so long text wraps inside it instead of
+    // running off in one line — resizable via the width handle.
+    el.style.width = `${Math.max(item.width * pageState.scale, fontPx * 2)}px`;
+    el.style.minWidth = '';
+  } else {
+    el.style.minWidth = `${Math.max(item.width * pageState.scale, fontPx)}px`;
+    el.style.width = '';
+  }
   el.style.minHeight = `${fontPx * 1.1}px`;
   el.style.fontFamily = cssFontFor(item);
   el.style.fontWeight = item.bold ? '700' : '400';
@@ -653,6 +667,21 @@ function mountItem(pageState, item) {
     }
     if (state.addTextMode) return;
     if (el.classList.contains('editing')) return; // let text selection work
+
+    if (e.shiftKey || e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      if (state.selected) { commitEdit(state.selected); selectItem(null); }
+      toggleMultiSelection(item);
+      return;
+    }
+    if (state.multiSelected.has(item)) {
+      // Part of an active group selection — keep the group intact instead
+      // of dropping into single-item edit/drag.
+      e.preventDefault();
+      return;
+    }
+    if (state.multiSelected.size) clearMultiSelection();
+
     e.preventDefault();
     if (state.selected && state.selected !== item) commitEdit(state.selected);
     selectItem(item);
@@ -664,7 +693,7 @@ function mountItem(pageState, item) {
 // ---------- undo / redo ----------
 
 const history = { undo: [], redo: [] };
-const SNAP_PROPS = ['str', 'x', 'y', 'size', 'fontId', 'bold', 'italic', 'color', 'edited', 'deleted'];
+const SNAP_PROPS = ['str', 'x', 'y', 'size', 'width', 'fontId', 'bold', 'italic', 'color', 'edited', 'deleted'];
 
 function snapshot(item) {
   const s = {};
@@ -858,8 +887,35 @@ function startResize(item, e) {
   document.addEventListener('mouseup', onUp);
 }
 
-// Single floating resize handle, attached to whichever item is selected.
+// Drag the box wider/narrower (new text boxes only) — text rewraps live.
+function startWidthResize(item, e) {
+  e.stopPropagation();
+  e.preventDefault();
+  const startX = e.clientX;
+  const startWidth = item.width;
+  const before = snapshot(item);
+  const { scale } = item.pageState;
+
+  const onMove = (ev) => {
+    const dx = ev.clientX - startX;
+    item.width = Math.max(30, startWidth + dx / scale);
+    positionEl(item.pageState, item, item.el);
+    updateHandle();
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    pushHistory(item, before);
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// Floating resize handles, attached to whichever item is selected: one for
+// font size (bottom-right corner), one for box width (right edge, new boxes
+// only — original single-line PDF text doesn't wrap so width is moot there).
 let handleEl = null;
+let widthHandleEl = null;
 
 function updateHandle() {
   const item = state.selected;
@@ -871,14 +927,31 @@ function updateHandle() {
       if (state.selected) startResize(state.selected, e);
     });
   }
+  if (!widthHandleEl) {
+    widthHandleEl = document.createElement('div');
+    widthHandleEl.className = 'resize-handle width-handle';
+    widthHandleEl.title = 'Drag to resize box width';
+    widthHandleEl.addEventListener('mousedown', (e) => {
+      if (state.selected) startWidthResize(state.selected, e);
+    });
+  }
   if (!item || item.deleted || item.el.classList.contains('editing')) {
     handleEl.remove();
+    widthHandleEl.remove();
     return;
   }
   const el = item.el;
   item.pageState.overlay.appendChild(handleEl);
   handleEl.style.left = `${el.offsetLeft + el.offsetWidth - 5}px`;
   handleEl.style.top = `${el.offsetTop + el.offsetHeight - 5}px`;
+
+  if (item.isNew) {
+    item.pageState.overlay.appendChild(widthHandleEl);
+    widthHandleEl.style.left = `${el.offsetLeft + el.offsetWidth - 5}px`;
+    widthHandleEl.style.top = `${el.offsetTop + el.offsetHeight / 2 - 5}px`;
+  } else {
+    widthHandleEl.remove();
+  }
 }
 
 // Once an original item moves away from its extracted position, leave a white
@@ -1002,6 +1075,121 @@ function applyStyleChange(mutate) {
   pushHistory(item, before);
 }
 
+function deleteSelected() {
+  if (state.multiSelected.size) {
+    const items = [...state.multiSelected];
+    clearMultiSelection();
+    for (const it of items) {
+      const before = snapshot(it);
+      it.deleted = true;
+      it.edited = true;
+      refreshItemView(it);
+      pushHistory(it, before);
+    }
+    status(`Deleted ${items.length} item${items.length > 1 ? 's' : ''}.`);
+    return;
+  }
+  const it = state.selected;
+  if (!it) return;
+  const before = snapshot(it);
+  it.deleted = true;
+  it.edited = true;
+  refreshItemView(it);
+  selectItem(null);
+  pushHistory(it, before);
+}
+
+// ---------- rectangle multi-select ----------
+
+function addToMultiSelection(item) {
+  state.multiSelected.add(item);
+  item.el?.classList.add('multi-selected');
+}
+
+function clearMultiSelection() {
+  for (const it of state.multiSelected) it.el?.classList.remove('multi-selected');
+  state.multiSelected.clear();
+  updateMultiSelectUI();
+}
+
+function toggleMultiSelection(item) {
+  if (state.multiSelected.has(item)) {
+    state.multiSelected.delete(item);
+    item.el?.classList.remove('multi-selected');
+  } else {
+    addToMultiSelection(item);
+  }
+  updateMultiSelectUI();
+}
+
+// Multi-select replaces the per-item style toolbar (font/size/bold/italic/
+// color/format-painter don't make sense for a mixed group) with just a count
+// plus Duplicate/Delete, which stay meaningful for any-sized selection.
+function updateMultiSelectUI() {
+  const n = state.multiSelected.size;
+  const soloControls = [els.ctlFont, els.ctlSize, els.ctlBold, els.ctlItalic, els.ctlColor, els.ctlFormatPainter];
+  if (n > 0) {
+    els.controls.hidden = false;
+    els.multiSelectLabel.hidden = false;
+    els.multiSelectLabel.textContent = `${n} selected`;
+    for (const el of soloControls) el.hidden = true;
+  } else {
+    els.multiSelectLabel.hidden = true;
+    for (const el of soloControls) el.hidden = false;
+    els.controls.hidden = !state.selected;
+  }
+}
+
+// Click-drag on empty page space to select every item the rectangle touches.
+// A plain click (no real movement) just clears the current selection.
+function startMarqueeSelect(pageState, e) {
+  const rect = pageState.overlay.getBoundingClientRect();
+  const startX = e.clientX - rect.left;
+  const startY = e.clientY - rect.top;
+  let dragging = false;
+  let marqueeEl = null;
+
+  const onMove = (ev) => {
+    const curX = ev.clientX - rect.left;
+    const curY = ev.clientY - rect.top;
+    if (!dragging && Math.hypot(curX - startX, curY - startY) < 4) return;
+    dragging = true;
+    if (!marqueeEl) {
+      marqueeEl = document.createElement('div');
+      marqueeEl.className = 'marquee-select';
+      pageState.overlay.appendChild(marqueeEl);
+    }
+    const left = Math.min(startX, curX), top = Math.min(startY, curY);
+    marqueeEl.style.left = `${left}px`;
+    marqueeEl.style.top = `${top}px`;
+    marqueeEl.style.width = `${Math.abs(curX - startX)}px`;
+    marqueeEl.style.height = `${Math.abs(curY - startY)}px`;
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    if (state.selected) commitEdit(state.selected);
+    selectItem(null);
+    clearMultiSelection();
+    if (dragging && marqueeEl) {
+      const mLeft = parseFloat(marqueeEl.style.left);
+      const mTop = parseFloat(marqueeEl.style.top);
+      const mRight = mLeft + parseFloat(marqueeEl.style.width);
+      const mBottom = mTop + parseFloat(marqueeEl.style.height);
+      marqueeEl.remove();
+      for (const it of [...pageState.items, ...pageState.newBoxes]) {
+        if (it.deleted || !it.el) continue;
+        const l = it.el.offsetLeft, t = it.el.offsetTop;
+        const r = l + it.el.offsetWidth, b = t + it.el.offsetHeight;
+        if (l < mRight && r > mLeft && t < mBottom && b > mTop) addToMultiSelection(it);
+      }
+      updateMultiSelectUI();
+    }
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
 // ---------- format painter ----------
 
 // Copy the selected item's style (font, size, bold, italic, color) and apply
@@ -1047,18 +1235,22 @@ function applyFormatPainter(item) {
 // ---------- duplicate & nudge ----------
 
 // Clone an item (style + text) as a new text box slightly below the source.
+// Does not change selection — callers decide how to select the result(s).
 function duplicateFrom(snap, pageState, offsetSteps = 1) {
   const item = {
     id: state.nextId++,
     str: snap.str, original: '',
     x: snap.x, y: snap.y - snap.size * 1.4 * offsetSteps,
-    size: snap.size, width: snap.width || 60,
+    // A few points of slack: the copied width is the source's rendered
+    // offsetWidth, which (with box-sizing: border-box) leaves the new box's
+    // content area zero slack — sub-pixel rounding alone can wrap text that
+    // fit fine in the original.
+    size: snap.size, width: (snap.width || 60) + 6,
     fontId: snap.fontId, bold: snap.bold, italic: snap.italic, color: snap.color,
     edited: false, deleted: false, isNew: true,
   };
   pageState.newBoxes.push(item);
   mountItem(pageState, item);
-  selectItem(item);
   // Creation as a history entry: undo marks it deleted (hides it).
   history.undo.push({ item, before: { ...snapshot(item), deleted: true }, after: snapshot(item), at: Date.now() });
   history.redo.length = 0;
@@ -1067,19 +1259,36 @@ function duplicateFrom(snap, pageState, offsetSteps = 1) {
   return item;
 }
 
+// Copies every currently-selected item's full style + text — one or many.
 function copySelected() {
-  const it = state.selected;
-  if (!it || it.deleted) return;
-  state.clipboard = { ...snapshot(it), width: it.el.offsetWidth / it.pageState.scale, pageState: it.pageState };
+  let items = [];
+  if (state.multiSelected.size) items = [...state.multiSelected].filter((it) => !it.deleted);
+  else if (state.selected && !state.selected.deleted) items = [state.selected];
+  if (!items.length) return;
+  state.clipboard = items.map((it) => ({
+    ...snapshot(it), width: it.el.offsetWidth / it.pageState.scale, pageState: it.pageState,
+  }));
   state.pasteCount = 0;
-  status('Copied — Cmd/Ctrl+V to paste.');
+  status(`Copied ${items.length} item${items.length > 1 ? 's' : ''} — Cmd/Ctrl+V to paste.`);
 }
 
+// Pastes the whole clipboard as a group, retaining each item's exact format
+// (font, size, bold, italic, color) — a multi-item paste selects the new
+// group together rather than dropping you into edit mode on one of them.
 function pasteClipboard() {
   const clip = state.clipboard;
-  if (!clip) return;
+  if (!clip || !clip.length) return;
   state.pasteCount++;
-  duplicateFrom(clip, clip.pageState, state.pasteCount);
+  const newItems = clip.map((snap) => duplicateFrom(snap, snap.pageState, state.pasteCount));
+  if (newItems.length === 1) {
+    selectItem(newItems[0]);
+  } else {
+    selectItem(null);
+    clearMultiSelection();
+    for (const it of newItems) addToMultiSelection(it);
+    updateMultiSelectUI();
+  }
+  status(`Pasted ${newItems.length} item${newItems.length > 1 ? 's' : ''}.`);
 }
 
 const NUDGE_KEYS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
@@ -1110,7 +1319,7 @@ function addTextBoxAt(pageState, e) {
   const item = {
     id: state.nextId++,
     str: '', original: '',
-    x: px, y: py, size: 11, width: 60,
+    x: px, y: py, size: 11, width: 180,
     fontId: els.ctlFont.value || DEFAULT_FONT_ID,
     bold: false, italic: false, color: '#000000',
     edited: false, deleted: false, isNew: true,
@@ -1262,16 +1471,7 @@ function init() {
     els.ctlItalic.classList.toggle('active', state.selected?.italic);
   });
   els.ctlColor.addEventListener('input', () => applyStyleChange((it) => { it.color = els.ctlColor.value; }));
-  els.ctlDelete.addEventListener('click', () => {
-    const it = state.selected;
-    if (!it) return;
-    const before = snapshot(it);
-    it.deleted = true;
-    it.edited = true;
-    refreshItemView(it);
-    selectItem(null);
-    pushHistory(it, before);
-  });
+  els.ctlDelete.addEventListener('click', deleteSelected);
 
   els.btnUndo.addEventListener('click', undo);
   els.btnRedo.addEventListener('click', redo);
@@ -1285,7 +1485,7 @@ function init() {
     startFormatPainter(true);
   });
   els.ctlDuplicate.addEventListener('click', () => {
-    if (state.selected) { copySelected(); pasteClipboard(); }
+    if (state.selected || state.multiSelected.size) { copySelected(); pasteClipboard(); }
   });
 
   document.addEventListener('keydown', (e) => {
@@ -1299,13 +1499,20 @@ function init() {
     if (active?.isContentEditable || active?.tagName === 'INPUT' || active?.tagName === 'SELECT') return;
 
     if (e.key === 'Escape' && state.formatPainter) { e.preventDefault(); stopFormatPainter(); return; }
+    if (e.key === 'Escape' && state.multiSelected.size) { e.preventDefault(); clearMultiSelection(); return; }
+
+    if ((e.key === 'Delete' || e.key === 'Backspace') && (state.selected || state.multiSelected.size)) {
+      e.preventDefault();
+      deleteSelected();
+      return;
+    }
 
     if (e.metaKey || e.ctrlKey) {
       const k = e.key.toLowerCase();
       if (k === 'z' && e.shiftKey) { e.preventDefault(); redo(); }
       else if (k === 'z') { e.preventDefault(); undo(); }
       else if (k === 'y') { e.preventDefault(); redo(); }
-      else if (k === 'c') { if (state.selected) { e.preventDefault(); copySelected(); } }
+      else if (k === 'c') { if (state.selected || state.multiSelected.size) { e.preventDefault(); copySelected(); } }
       else if (k === 'v') { if (state.clipboard) { e.preventDefault(); pasteClipboard(); } }
       else if (e.key === '=' || e.key === '+') { e.preventDefault(); setZoom(state.zoomIdx + 1); }
       else if (e.key === '-' || e.key === '_') { e.preventDefault(); setZoom(state.zoomIdx - 1); }

@@ -5,6 +5,7 @@ import {
 } from './fonts.js';
 import { exportPdf } from './exporter.js';
 import { saveDraft, loadDraft, clearDraft } from './draft.js';
+import { extractLines } from './lines.js';
 import { inject } from '@vercel/analytics';
 
 
@@ -259,13 +260,25 @@ async function renderPage(pageNum) {
     page, wrap, canvas, overlay, pageNum,
     baseWidth: page.getViewport({ scale: 1 }).width,
     viewport: null, scale: null,
-    items: [], newBoxes: [],
+    items: [], newBoxes: [], lines: [],
   };
   state.pages[pageNum - 1] = pageState;
 
   await applyViewport(pageState);
   pageState.items = await extractItems(page);
   for (const item of pageState.items) mountItem(pageState, item);
+  try {
+    const detected = await extractLines(page);
+    pageState.lines = detected.map((ln) => ({
+      id: state.nextId++,
+      x: ln.x, y: ln.y, ox: ln.x, oy: ln.y,
+      width: ln.width, height: ln.height, owidth: ln.width, oheight: ln.height,
+      color: ln.color, deleted: false, isLine: true,
+    }));
+    for (const line of pageState.lines) mountLine(pageState, line);
+  } catch (err) {
+    console.warn('Could not detect decorative lines on this page', err);
+  }
 
   overlay.addEventListener('mousedown', (e) => {
     if (e.target !== overlay) return;
@@ -444,6 +457,7 @@ function closeConfirmModal() {
 const ITEM_FIELDS = [
   'id', 'str', 'original', 'x', 'y', 'ox', 'oy', 'osize', 'owidth', 'size', 'width',
   'fontId', 'bold', 'italic', 'color', 'align', 'edited', 'deleted', 'isNew', 'fontRaw',
+  'height', 'oheight', 'isLine',
 ];
 
 function serializeItem(it) {
@@ -460,6 +474,7 @@ function buildDraftSnapshot() {
     pages: state.pages.map((ps) => ({
       items: ps.items.map(serializeItem),
       newBoxes: ps.newBoxes.map(serializeItem),
+      lines: ps.lines.map(serializeItem),
     })),
     savedAt: Date.now(),
   };
@@ -610,6 +625,13 @@ async function restoreDraft(draft) {
       ps.newBoxes.push(item);
       mountItem(ps, item);
     }
+    if (saved.lines?.length === ps.lines.length) {
+      ps.lines.forEach((line, i) => {
+        Object.assign(line, saved.lines[i]);
+        maxId = Math.max(maxId, line.id + 1);
+        refreshLineView(line);
+      });
+    }
   });
   state.nextId = maxId;
 
@@ -693,6 +715,83 @@ function mountItem(pageState, item) {
   refreshItemView(item);
 }
 
+// ---------- decorative lines (section-divider rules) ----------
+
+function positionLineEl(pageState, line, el) {
+  const { viewport, scale } = pageState;
+  const [vx1, vy1] = viewport.convertToViewportPoint(line.x, line.y + line.height);
+  const [vx2] = viewport.convertToViewportPoint(line.x + line.width, line.y);
+  el.style.left = `${vx1}px`;
+  el.style.top = `${vy1}px`;
+  el.style.width = `${Math.max(vx2 - vx1, 1)}px`;
+  el.style.height = `${Math.max(line.height * scale, 1)}px`;
+  // The canvas already renders the line at its ORIGINAL spot — painting our
+  // own bar there too would just double up. Only materialize a visible bar
+  // once it's diverged from that (moved to a new spot); deleted has nothing
+  // to show at all (the old spot gets a white mask instead, like text).
+  const moved = line.x !== line.ox || line.y !== line.oy;
+  el.style.background = (!line.deleted && moved) ? line.color : 'transparent';
+}
+
+function ensureLineMask(line) {
+  const moved = line.x !== line.ox || line.y !== line.oy;
+  if (!line.deleted && !moved) {
+    line.maskEl?.remove();
+    line.maskEl = null;
+    return;
+  }
+  if (!line.maskEl) {
+    line.maskEl = document.createElement('div');
+    line.maskEl.className = 'text-mask';
+    line.pageState.overlay.prepend(line.maskEl);
+  }
+  const { viewport, scale } = line.pageState;
+  const [vx, vy] = viewport.convertToViewportPoint(line.ox, line.oy + line.oheight);
+  line.maskEl.style.left = `${vx - 1}px`;
+  line.maskEl.style.top = `${vy - 1}px`;
+  line.maskEl.style.width = `${line.owidth * scale + 2}px`;
+  line.maskEl.style.height = `${Math.max(line.oheight * scale, 1) + 2}px`;
+}
+
+function refreshLineView(line) {
+  positionLineEl(line.pageState, line, line.el);
+  line.el.classList.toggle('deleted', line.deleted);
+  ensureLineMask(line);
+}
+
+function mountLine(pageState, line) {
+  const el = document.createElement('div');
+  el.className = 'line-item';
+  el.dataset.id = line.id;
+  positionLineEl(pageState, line, el);
+  pageState.overlay.appendChild(el);
+  line.el = el;
+  line.pageState = pageState;
+
+  el.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+    if (line.deleted) return;
+    if (state.addTextMode || state.formatPainter) return;
+
+    if (e.shiftKey || e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      if (state.selected) { commitEdit(state.selected); selectItem(null); }
+      toggleMultiSelection(line);
+      return;
+    }
+    if (state.multiSelected.has(line)) {
+      e.preventDefault();
+      return;
+    }
+    if (state.multiSelected.size) clearMultiSelection();
+
+    e.preventDefault();
+    if (state.selected) commitEdit(state.selected);
+    selectItem(line);
+    startDragMove(line, e);
+  });
+}
+
 // ---------- undo / redo ----------
 
 const history = { undo: [], redo: [] };
@@ -727,8 +826,8 @@ function pushHistory(item, before, kind) {
 
 function restore(item, snap) {
   Object.assign(item, snap);
-  positionEl(item.pageState, item, item.el);
-  refreshItemView(item);
+  if (item.isLine) refreshLineView(item);
+  else { positionEl(item.pageState, item, item.el); refreshItemView(item); }
   if (state.selected === item && !item.deleted) selectItem(item); // sync toolbar
   else if (state.selected === item) selectItem(null);
   updateHandle();
@@ -764,7 +863,7 @@ const SNAP_PX = 6;
 // other items' outer edges and center lines, plus the page's center lines.
 function collectSnapTargets(pageState, exclude) {
   const v = [], h = [];
-  for (const it of [...pageState.items, ...pageState.newBoxes]) {
+  for (const it of [...pageState.items, ...pageState.newBoxes, ...pageState.lines]) {
     if (it === exclude || it.deleted || !it.el) continue;
     const l = it.el.offsetLeft, t = it.el.offsetTop;
     const w = it.el.offsetWidth, hh = it.el.offsetHeight;
@@ -843,7 +942,8 @@ function startDragMove(item, e) {
 
     item.x = origX + (left - startLeft) / scale;
     item.y = origY - (top - startTop) / scale; // PDF y-axis points up
-    positionEl(item.pageState, item, item.el);
+    if (item.isLine) positionLineEl(item.pageState, item, item.el);
+    else positionEl(item.pageState, item, item.el);
     updateHandle();
   };
   const onUp = () => {
@@ -852,11 +952,14 @@ function startDragMove(item, e) {
     item.el.classList.remove('dragging');
     hideGuides(item.pageState);
     if (dragging) {
-      if (!item.isNew) item.edited = true;
-      refreshItemView(item);
+      if (item.isLine) refreshLineView(item);
+      else {
+        if (!item.isNew) item.edited = true;
+        refreshItemView(item);
+      }
       updateHandle();
       pushHistory(item, before);
-    } else {
+    } else if (!item.isLine) {
       beginEdit(item);
     }
   };
@@ -938,7 +1041,7 @@ function updateHandle() {
       if (state.selected) startWidthResize(state.selected, e);
     });
   }
-  if (!item || item.deleted || item.el.classList.contains('editing')) {
+  if (!item || item.deleted || item.isLine || item.el.classList.contains('editing')) {
     handleEl.remove();
     widthHandleEl.remove();
     return;
@@ -1061,6 +1164,13 @@ function syncAlignButtons(align) {
   els.ctlAlignRight.classList.toggle('active', align === 'right');
 }
 
+// Controls that only make sense for a text item (font/size/bold/italic/
+// align/format-painter) — hidden for a rectangle multi-selection or a line.
+const TEXT_ONLY_CONTROLS = [
+  'ctlFont', 'ctlSize', 'ctlBold', 'ctlItalic', 'ctlColor', 'ctlFormatPainter',
+  'ctlAlignLeft', 'ctlAlignCenter', 'ctlAlignRight',
+].map((k) => els[k]);
+
 function selectItem(item) {
   if (state.selected?.el) state.selected.el.classList.remove('selected');
   state.selected = item;
@@ -1068,6 +1178,16 @@ function selectItem(item) {
   updateHandle();
   if (!item) return;
   item.el.classList.add('selected');
+  if (item.isLine) {
+    for (const el of TEXT_ONLY_CONTROLS) el.hidden = true;
+    els.ctlDuplicate.hidden = true;
+    els.multiSelectLabel.hidden = false;
+    els.multiSelectLabel.textContent = 'Line';
+    return;
+  }
+  for (const el of TEXT_ONLY_CONTROLS) el.hidden = false;
+  els.ctlDuplicate.hidden = false;
+  els.multiSelectLabel.hidden = true;
   els.ctlFont.value = item.fontId;
   els.ctlSize.value = +item.size.toFixed(1);
   els.ctlBold.classList.toggle('active', item.bold);
@@ -1096,7 +1216,7 @@ function deleteSelected() {
       const before = snapshot(it);
       it.deleted = true;
       it.edited = true;
-      refreshItemView(it);
+      if (it.isLine) refreshLineView(it); else refreshItemView(it);
       pushHistory(it, before);
     }
     status(`Deleted ${items.length} item${items.length > 1 ? 's' : ''}.`);
@@ -1107,7 +1227,7 @@ function deleteSelected() {
   const before = snapshot(it);
   it.deleted = true;
   it.edited = true;
-  refreshItemView(it);
+  if (it.isLine) refreshLineView(it); else refreshItemView(it);
   selectItem(null);
   pushHistory(it, before);
 }
@@ -1140,18 +1260,14 @@ function toggleMultiSelection(item) {
 // plus Duplicate/Delete, which stay meaningful for any-sized selection.
 function updateMultiSelectUI() {
   const n = state.multiSelected.size;
-  const soloControls = [
-    els.ctlFont, els.ctlSize, els.ctlBold, els.ctlItalic, els.ctlColor, els.ctlFormatPainter,
-    els.ctlAlignLeft, els.ctlAlignCenter, els.ctlAlignRight,
-  ];
   if (n > 0) {
     els.controls.hidden = false;
     els.multiSelectLabel.hidden = false;
     els.multiSelectLabel.textContent = `${n} selected`;
-    for (const el of soloControls) el.hidden = true;
+    for (const el of TEXT_ONLY_CONTROLS) el.hidden = true;
   } else {
     els.multiSelectLabel.hidden = true;
-    for (const el of soloControls) el.hidden = false;
+    for (const el of TEXT_ONLY_CONTROLS) el.hidden = false;
     els.controls.hidden = !state.selected;
   }
 }
@@ -1193,7 +1309,7 @@ function startMarqueeSelect(pageState, e) {
       const mRight = mLeft + parseFloat(marqueeEl.style.width);
       const mBottom = mTop + parseFloat(marqueeEl.style.height);
       marqueeEl.remove();
-      for (const it of [...pageState.items, ...pageState.newBoxes]) {
+      for (const it of [...pageState.items, ...pageState.newBoxes, ...pageState.lines]) {
         if (it.deleted || !it.el) continue;
         const l = it.el.offsetLeft, t = it.el.offsetTop;
         const r = l + it.el.offsetWidth, b = t + it.el.offsetHeight;
@@ -1214,7 +1330,7 @@ function startMarqueeSelect(pageState, e) {
 // (keeps painting until toggled off or Escape).
 function startFormatPainter(sticky) {
   const src = state.selected;
-  if (!src) return;
+  if (!src || src.isLine) return;
   state.formatPainter = {
     fontId: src.fontId, size: src.size, bold: src.bold, italic: src.italic, color: src.color,
     align: src.align, sticky,
@@ -1280,8 +1396,8 @@ function duplicateFrom(snap, pageState, offsetSteps = 1) {
 // Copies every currently-selected item's full style + text — one or many.
 function copySelected() {
   let items = [];
-  if (state.multiSelected.size) items = [...state.multiSelected].filter((it) => !it.deleted);
-  else if (state.selected && !state.selected.deleted) items = [state.selected];
+  if (state.multiSelected.size) items = [...state.multiSelected].filter((it) => !it.deleted && !it.isLine);
+  else if (state.selected && !state.selected.deleted && !state.selected.isLine) items = [state.selected];
   if (!items.length) return;
   state.clipboard = items.map((it) => ({
     ...snapshot(it), width: it.el.offsetWidth / it.pageState.scale, pageState: it.pageState,
@@ -1319,9 +1435,13 @@ function nudgeSelected(key, big) {
   const before = snapshot(item);
   item.x += dx * step;
   item.y -= dy * step; // PDF y-axis points up
-  if (!item.isNew) item.edited = true;
-  positionEl(item.pageState, item, item.el);
-  refreshItemView(item);
+  if (item.isLine) {
+    refreshLineView(item);
+  } else {
+    if (!item.isNew) item.edited = true;
+    positionEl(item.pageState, item, item.el);
+    refreshItemView(item);
+  }
   updateHandle();
   pushHistory(item, before, 'nudge');
   return true;
@@ -1397,7 +1517,7 @@ async function doExport() {
   els.btnExport.disabled = true;
   try {
     const pagesState = state.pages.map((p) => ({
-      items: p.items, newBoxes: p.newBoxes,
+      items: p.items, newBoxes: p.newBoxes, lines: p.lines,
     }));
     const { bytes, fallbacks, warnings, linkCount } = await exportPdf(state.pdfBytes, pagesState, {
       linkify: els.ctlLinks.checked,

@@ -228,9 +228,11 @@ function replacePageContent(doc, page, newBytes) {
 
 /**
  * @param originalBytes  Uint8Array of the loaded PDF
- * @param pagesState     per-page: { items: [...], newBoxes: [...] }
+ * @param pagesState     per-page: { items: [...], newBoxes: [...], lines: [...] }
  *   item: { str, x, y (PDF-space baseline), size, fontId, bold, italic,
  *           color, edited, deleted }
+ *   line: { x, y, width, height, color, ox, oy, owidth, oheight, deleted } —
+ *     a detected decorative divider (vector graphics, not text)
  * @param options        { linkify, pageOrder } — linkify adds invisible
  *   clickable link annotations over any URLs/emails found in the text (no
  *   visual change). pageOrder, if given, is the final list of original
@@ -309,6 +311,26 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
           const x = box.x + alignOffset(font, lines[li], box.size, box.align, box.width);
           linkCount += await linkifyRun(doc, page, pool, box, lines[li], x, box.y - li * box.size * 1.25, box.width || 0);
         }
+      }
+    }
+
+    // Decorative lines (section dividers etc.) are vector graphics, not
+    // text — left completely alone unless moved or deleted, in which case
+    // we mask the original spot with white and, if moved, draw a fresh bar
+    // at the new position. Untouched lines' original draw operators are
+    // never touched.
+    for (const ln of state.lines || []) {
+      const moved = ln.x !== ln.ox || ln.y !== ln.oy;
+      if (!ln.deleted && !moved) continue;
+      page.drawRectangle({
+        x: ln.ox - 1, y: ln.oy - 1, width: ln.owidth + 2, height: Math.max(ln.oheight, 0.5) + 2,
+        color: rgb(1, 1, 1),
+      });
+      if (!ln.deleted) {
+        page.drawRectangle({
+          x: ln.x, y: ln.y, width: ln.width, height: Math.max(ln.height, 0.5),
+          color: hexToRgb(ln.color),
+        });
       }
     }
   }

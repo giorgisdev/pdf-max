@@ -312,6 +312,27 @@ body.format-painter-cursor .text-item:not(.editing) { cursor: copy; }
   background: #fff;
   pointer-events: none;
 }
+
+/* A detected decorative line/rule — same interaction model as a text box
+   (select, drag, delete) but with no text to edit. The visible bar can be
+   just 1px tall, so a taller invisible hit-slop makes it easy to grab. */
+.line-item {
+  position: absolute;
+  z-index: 1;
+  cursor: move;
+  border-radius: 1px;
+}
+.line-item::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  top: -5px; bottom: -5px;
+}
+.line-item:hover { outline: 1px dashed rgba(37, 87, 214, 0.55); outline-offset: 3px; }
+.line-item.selected { outline: 1px solid #2557d6; outline-offset: 3px; }
+.line-item.multi-selected { outline: 1px solid #2557d6; outline-offset: 3px; background: rgba(37, 87, 214, 0.35); }
+.line-item.dragging { opacity: 0.7; z-index: 6; }
+.line-item.deleted { visibility: hidden; pointer-events: none; }
 .text-item.new-box:not(.editing):empty { display: none; }
 
 #status-bar {

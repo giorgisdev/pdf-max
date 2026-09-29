@@ -3,7 +3,7 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
   FONTS, DEFAULT_FONT_ID, detectFont, cleanFontName, checkFontAvailability, styleKey,
 } from './fonts.js';
-import { exportPdf } from './exporter.js';
+import { exportPdf, preflightExport } from './exporter.js';
 import { saveDraft, loadDraft, listDrafts, deleteDraft } from './draft.js';
 import { extractLines } from './lines.js';
 import { inject } from '@vercel/analytics';
@@ -54,6 +54,8 @@ const els = {
   pagesGrid: $('pages-grid'), pagesPanelHint: $('pages-panel-hint'), btnDeletePages: $('btn-delete-pages'),
   confirmModal: $('confirm-modal'), confirmText: $('confirm-modal-text'),
   confirmCancel: $('confirm-cancel'), confirmOk: $('confirm-ok'),
+  preflightModal: $('preflight-modal'), preflightList: $('preflight-list'),
+  preflightCancel: $('preflight-cancel'), preflightOk: $('preflight-ok'),
   autosaveIndicator: $('autosave-indicator'),
 };
 
@@ -1843,15 +1845,43 @@ function setFontHighlight(raw) {
 
 // ---------- export ----------
 
+function exportPagesState() {
+  return state.pages.map((p) => ({ items: p.items, newBoxes: p.newBoxes, lines: p.lines }));
+}
+
+// Pre-export check: if the export would change fonts or garble characters,
+// list what will happen and let the user go back or export anyway.
 async function doExport() {
   if (!state.pdfBytes) return;
   if (state.selected) commitEdit(state.selected);
+  status('Checking export…');
+  els.btnExport.disabled = true;
+  let issues = [];
+  try {
+    issues = await preflightExport(state.pdfBytes, exportPagesState(), { pageOrder: state.pageOrder });
+  } catch (err) {
+    console.warn('Pre-export check failed', err); // don't block exporting on a checker bug
+  }
+  if (!issues.length) { await runExport(); return; }
+  els.btnExport.disabled = false;
+  status('');
+  els.preflightList.innerHTML = '';
+  for (const issue of issues) {
+    const li = document.createElement('li');
+    li.className = issue.level;
+    li.textContent = issue.text;
+    els.preflightList.appendChild(li);
+  }
+  els.preflightModal.hidden = false;
+}
+
+function closePreflight() { els.preflightModal.hidden = true; }
+
+async function runExport() {
   status('Exporting…');
   els.btnExport.disabled = true;
   try {
-    const pagesState = state.pages.map((p) => ({
-      items: p.items, newBoxes: p.newBoxes, lines: p.lines,
-    }));
+    const pagesState = exportPagesState();
     const { bytes, fallbacks, warnings, linkCount } = await exportPdf(state.pdfBytes, pagesState, {
       linkify: els.ctlLinks.checked,
       pageOrder: state.pageOrder,
@@ -1917,6 +1947,8 @@ function init() {
   els.btnAddText.addEventListener('click', () => setAddTextMode(!state.addTextMode));
   els.btnExport.addEventListener('click', doExport);
   els.btnDeletePages.addEventListener('click', deleteSelectedPages);
+  els.preflightCancel.addEventListener('click', closePreflight);
+  els.preflightOk.addEventListener('click', () => { closePreflight(); runExport(); });
   els.confirmCancel.addEventListener('click', closeConfirmModal);
   els.confirmOk.addEventListener('click', () => {
     const cb = confirmCallback;
@@ -1975,6 +2007,10 @@ function init() {
   });
 
   document.addEventListener('keydown', (e) => {
+    if (!els.preflightModal.hidden) {
+      if (e.key === 'Escape') { e.preventDefault(); closePreflight(); }
+      return;
+    }
     if (!els.confirmModal.hidden) {
       if (e.key === 'Escape') { e.preventDefault(); closeConfirmModal(); }
       return;

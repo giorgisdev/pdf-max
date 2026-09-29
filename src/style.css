@@ -19,17 +19,23 @@ body {
 #toolbar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 8px 16px;
+  gap: 10px;
+  padding: 8px 12px;
   background: #fff;
   border-bottom: 1px solid #d5d8dc;
   position: sticky;
   top: 0;
   z-index: 10;
-  flex-wrap: wrap;
+  /* One row always; if the window is too narrow, scroll instead of wrapping. */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
-.toolbar-group { display: flex; align-items: center; gap: 6px; }
-.toolbar-group.right { margin-left: auto; }
+.toolbar-group { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.toolbar-group.right { margin-left: auto; gap: 8px; }
+#toolbar .btn { padding: 6px 9px; white-space: nowrap; }
+#toolbar .btn.icon { padding: 5px 8px; }
 
 .btn {
   padding: 6px 12px;
@@ -54,8 +60,8 @@ label.checkbox input { accent-color: #2557d6; cursor: pointer; }
 #autosave-indicator { font-size: 12px; color: #8a93a0; min-width: 46px; white-space: nowrap; }
 #multi-select-label { font-size: 13px; color: #445; font-weight: 600; white-space: nowrap; padding-right: 4px; }
 
-#ctl-font { padding: 5px 6px; border-radius: 6px; border: 1px solid #c8ccd2; font-size: 13px; }
-#ctl-size { width: 62px; padding: 5px 6px; border-radius: 6px; border: 1px solid #c8ccd2; font-size: 13px; }
+#ctl-font { width: 118px; padding: 5px 4px; border-radius: 6px; border: 1px solid #c8ccd2; font-size: 13px; }
+#ctl-size { width: 54px; padding: 5px 6px; border-radius: 6px; border: 1px solid #c8ccd2; font-size: 13px; }
 #ctl-color { width: 34px; height: 30px; padding: 2px; border: 1px solid #c8ccd2; border-radius: 6px; background: #fff; }
 
 .align-group { display: flex; gap: 2px; }
@@ -347,8 +353,16 @@ body.format-painter-cursor .text-item:not(.editing) { cursor: copy; }
 #toolbar.hidden { display: none; }
 
 #doc-name {
-  width: 200px; padding: 5px 8px; font-size: 14px; color: #1a1a2e;
+  width: 140px; padding: 5px 6px; font-size: 14px; color: #1a1a2e;
   border: 1px solid transparent; border-radius: 6px; background: transparent; text-overflow: ellipsis;
 }
 #doc-name:hover { border-color: #c8ccd2; }
 #doc-name:focus { border-color: #2557d6; background: #fff; outline: none; }
+
+.modal.preflight { max-width: 520px; }
+.modal.preflight h3 { margin: 0 0 6px; font-size: 16px; }
+.modal.preflight p { margin-bottom: 10px; }
+#preflight-list { list-style: none; margin: 0 0 16px; padding: 0; max-height: 45vh; overflow: auto; font-size: 13px; line-height: 1.4; }
+#preflight-list li { padding: 7px 10px 7px 12px; margin-bottom: 6px; border-radius: 6px; border-left: 4px solid #8a93a0; background: #f4f6f8; }
+#preflight-list li.error { border-left-color: #c62828; background: #fdecea; }
+#preflight-list li.warn { border-left-color: #e8a000; background: #fff6df; }

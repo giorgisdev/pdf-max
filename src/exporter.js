@@ -63,6 +63,17 @@ function hexToRgb(hex) {
 // and a bullet bakes in as a broken glyph that PDF viewers show as "?". Try
 // the plain-ASCII substitution FIRST, since it's safe in every font, rather
 // than trusting a successful draw of the original as proof it rendered right.
+// Typographic characters swapped for plain ASCII before drawing (safe in
+// every font, including custom ones that silently draw a blank glyph).
+function asciiSubstitute(text) {
+  return text
+    .replace(/[‘’‛]/g, "'")
+    .replace(/[“”‟]/g, '"')
+    .replace(/[–—]/g, '-')
+    .replace(/…/g, '...')
+    .replace(/\u00a0/g, ' ');
+}
+
 function drawTextSafe(page, text, opts, font) {
   // Bullets are drawn as filled circles rather than glyphs: many fonts lack
   // "•" and would show a .notdef box or "?".
@@ -84,12 +95,7 @@ function drawTextSafe(page, text, opts, font) {
     });
     return allOk;
   }
-  const substituted = text
-    .replace(/[‘’‛]/g, "'")
-    .replace(/[“”‟]/g, '"')
-    .replace(/[–—]/g, '-')
-    .replace(/…/g, '...')
-    .replace(/\u00a0/g, ' ');
+  const substituted = asciiSubstitute(text);
   const attempts = [substituted, text];
   for (const t of attempts) {
     try {
@@ -387,4 +393,100 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
 
   const bytes = await doc.save();
   return { bytes, fallbacks: pool.fallbacks, warnings, linkCount };
+}
+
+const KNOWN_FONT_PATTERNS = Object.values(FONTS).flatMap((f) => f.match);
+
+/**
+ * Dry-run check of what exportPdf would do to the text, without producing a
+ * file. Mirrors exportPdf's rules: original items are only redrawn on pages
+ * with at least one edit, new boxes always are. Returns a list of
+ * { level: 'error' | 'warn' | 'info', text } — empty means a clean export.
+ *   error: characters that will come out as "?" / a missing-glyph box
+ *   warn:  fonts that will be substituted, text running off the page
+ *   info:  typographic characters replaced by plain ASCII
+ */
+export async function preflightExport(originalBytes, pagesState, options = {}) {
+  const { pageOrder = null } = options;
+  const doc = await PDFDocument.load(originalBytes, { ignoreEncryption: true });
+  doc.registerFontkit(fontkit);
+  const pool = new FontPool(doc);
+  const pdfPages = doc.getPages();
+  const order = pageOrder || pdfPages.map((_, i) => i);
+
+  const badChars = new Map();      // char -> { pages: Set, fonts: Set }
+  const replaced = new Map();      // char -> replacement
+  const unknownFonts = new Map();  // raw name -> font label used instead
+  const overflow = new Map();      // display page -> count
+  const note = (map, key, page, font) => {
+    if (!map.has(key)) map.set(key, { pages: new Set(), fonts: new Set() });
+    const rec = map.get(key);
+    rec.pages.add(page);
+    rec.fonts.add(font);
+  };
+
+  for (let i = 0; i < order.length; i++) {
+    const p = order[i];
+    const state = pagesState[p];
+    if (!state) continue;
+    const pageNum = i + 1;
+    const { width: pw, height: ph } = pdfPages[p].getSize();
+    const anyEdit = state.items.some((it) => it.edited || it.deleted);
+    const runs = [
+      ...(anyEdit ? state.items : []),
+      ...state.newBoxes,
+    ].filter((it) => !it.deleted && it.str && it.str.trim());
+
+    for (const it of runs) {
+      const font = await pool.get(it.fontId, it.bold, it.italic);
+      const label = FONTS[it.fontId]?.label || it.fontId;
+      let charSet = null;
+      try { charSet = new Set(font.getCharacterSet()); } catch { /* fall back to width probe */ }
+
+      if (!it.isNew && it.fontRaw && !KNOWN_FONT_PATTERNS.some((re) => re.test(it.fontRaw))) {
+        unknownFonts.set(it.fontRaw, label);
+      }
+
+      for (const ch of it.str) {
+        if (ch === '•' || ch === '\n' || ch < ' ') continue; // bullets are drawn as circles
+        const mapped = asciiSubstitute(ch);
+        if (mapped !== ch) replaced.set(ch, mapped);
+        for (const m of mapped) {
+          const ok = charSet
+            ? charSet.has(m.codePointAt(0))
+            : (() => { try { font.widthOfTextAtSize(m, 10); return true; } catch { return false; } })();
+          if (!ok) note(badChars, ch, pageNum, label);
+        }
+      }
+
+      const right = it.x + (it.width || 0);
+      if (it.x < -1 || right > pw + 1 || it.y < -1 || it.y > ph + 1) {
+        overflow.set(pageNum, (overflow.get(pageNum) || 0) + 1);
+      }
+    }
+  }
+
+  const issues = [];
+  const pagesText = (set) => `page${set.size > 1 ? 's' : ''} ${[...set].sort((a, b) => a - b).join(', ')}`;
+  if (badChars.size) {
+    const list = [...badChars].map(([ch, rec]) => `"${ch}" (${pagesText(rec.pages)}, ${[...rec.fonts].join(' / ')})`).join(', ');
+    issues.push({
+      level: 'error',
+      text: `These characters aren't in the export font and will show as "?" or an empty box: ${list}`,
+    });
+  }
+  for (const f of pool.fallbacks) {
+    issues.push({ level: 'warn', text: `Font substituted: ${f.requested} → ${f.used}.` });
+  }
+  for (const [raw, label] of unknownFonts) {
+    issues.push({ level: 'warn', text: `Original font "${raw}" isn't in the font library — its text will use ${label}.` });
+  }
+  for (const [page, n] of overflow) {
+    issues.push({ level: 'warn', text: `Page ${page}: ${n} text box${n > 1 ? 'es extend' : ' extends'} past the page edge.` });
+  }
+  if (replaced.size) {
+    const list = [...replaced].map(([a, b]) => `${a} → ${b}`).join(',  ');
+    issues.push({ level: 'info', text: `Typographic characters will be replaced with plain ones: ${list}` });
+  }
+  return issues;
 }

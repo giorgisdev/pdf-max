@@ -9,6 +9,8 @@
 <body>
   <header id="toolbar">
     <div class="toolbar-group">
+      <button id="btn-home" class="btn icon" title="Back to start page (your work is autosaved)">&#8962;</button>
+      <input id="doc-name" type="text" spellcheck="false" title="Rename document" aria-label="Document name" />
       <button id="btn-undo" class="btn icon" title="Undo (Ctrl/Cmd+Z)" disabled>&#8630;</button>
       <button id="btn-redo" class="btn icon" title="Redo (Ctrl/Cmd+Y)" disabled>&#8631;</button>
     </div>
@@ -37,6 +39,8 @@
       </div>
       <input id="ctl-color" type="color" value="#000000" title="Text color" />
       <button id="ctl-format-painter" class="btn toggle" title="Format painter — click to copy style once, double-click to keep painting">&#128396;&#65039;</button>
+      <button id="ctl-align-edges" class="btn" title="Align left edges of the selected text boxes (vertical positions stay the same)" hidden>Align left edges</button>
+      <button id="ctl-merge" class="btn" title="Merge the selected text boxes into one box" hidden>Merge into one box</button>
       <button id="ctl-duplicate" class="btn" title="Duplicate (Cmd/Ctrl+C, Cmd/Ctrl+V)">Duplicate</button>
       <button id="ctl-delete" class="btn danger" title="Delete text">Delete</button>
     </div>
@@ -64,21 +68,22 @@
     </aside>
 
     <div id="main-col">
-      <div id="font-report" hidden></div>
-
       <main id="workspace">
-        <div id="restore-banner" class="restore-banner" hidden>
-          <span id="restore-banner-text"></span>
-          <div class="restore-banner-actions">
-            <button id="btn-discard-draft" class="btn">Not this — start over</button>
-          </div>
-        </div>
-        <div id="dropzone">
-          <div class="dz-inner">
-            <div class="dz-icon">&#128196;</div>
-            <p><strong>Drop a PDF here</strong></p>
-            <p class="dz-sub">or use "Select file" above</p>
-          </div>
+        <div id="font-report" hidden></div>
+        <div id="start-page">
+          <section class="start-top">
+            <h2>Start a new document</h2>
+            <button id="start-open" class="start-card">
+              <span class="start-thumb start-plus">+</span>
+              <span class="start-name">Open a PDF</span>
+              <span class="start-meta">or drop one anywhere</span>
+            </button>
+          </section>
+          <section class="start-recent">
+            <h2>Recent documents - Autosave up to 3 docs at a time</h2>
+            <div id="recent-grid"></div>
+            <p id="recent-empty">No recent documents yet. Your last 3 autosaved files will show up here.</p>
+          </section>
         </div>
         <div id="pages"></div>
       </main>

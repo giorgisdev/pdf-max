@@ -64,13 +64,32 @@ function hexToRgb(hex) {
 // the plain-ASCII substitution FIRST, since it's safe in every font, rather
 // than trusting a successful draw of the original as proof it rendered right.
 function drawTextSafe(page, text, opts, font) {
+  // Bullets are drawn as filled circles rather than glyphs: many fonts lack
+  // "•" and would show a .notdef box or "?".
+  if (text.includes('•')) {
+    const { x, y, size, color } = opts;
+    const parts = text.split('•');
+    let cursor = x;
+    let allOk = true;
+    parts.forEach((part, i) => {
+      if (part) {
+        if (!drawTextSafe(page, part, { ...opts, x: cursor }, font)) allOk = false;
+        try { cursor += font.widthOfTextAtSize(part.replace(/[^\x20-\x7e]/g, '?'), size); } catch { /* keep cursor */ }
+      }
+      if (i < parts.length - 1) {
+        const r = size * 0.13;
+        page.drawCircle({ x: cursor + size * 0.175, y: y + size * 0.3, size: r, color });
+        cursor += size * 0.35;
+      }
+    });
+    return allOk;
+  }
   const substituted = text
     .replace(/[‘’‛]/g, "'")
     .replace(/[“”‟]/g, '"')
     .replace(/[–—]/g, '-')
-    .replace(/•/g, '*')
     .replace(/…/g, '...')
-    .replace(/ /g, ' ');
+    .replace(/\u00a0/g, ' ');
   const attempts = [substituted, text];
   for (const t of attempts) {
     try {
@@ -195,6 +214,25 @@ function wrapBoxLines(font, box) {
   return lines;
 }
 
+// The text lines to draw for an original item, each with its baseline y. A
+// wrapped paragraph keeps its original line breaks until its text or width
+// changes, then re-wraps to its width at the original leading.
+function itemLines(font, it) {
+  if (!it.para) return [{ text: it.str, y: it.y, dx: 0 }];
+  let texts;
+  if (it.str === it.original && it.width === it.owrap) {
+    texts = it.plines;
+  } else if (it.indent) {
+    // Hanging indent: first line gets the full width, the rest are indented.
+    const first = wrapText(font, it.str, it.size, it.width);
+    const remainder = it.str.slice(first[0].length).trim();
+    texts = [first[0], ...(remainder ? wrapText(font, remainder, it.size, it.width - it.indent) : [])];
+  } else {
+    texts = wrapBoxLines(font, it);
+  }
+  return texts.map((text, i) => ({ text, y: it.y - i * it.leading, dx: i && it.indent ? it.indent : 0 }));
+}
+
 function collectContentBytes(doc, page) {
   const contentsRef = page.node.get(PDFName.of('Contents'));
   const resolved = contentsRef instanceof PDFRef ? doc.context.lookup(contentsRef) : contentsRef;
@@ -270,14 +308,16 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
 
       for (const it of state.items) {
         if (it.deleted) continue;
-        const text = it.str;
-        if (!text || !text.trim()) continue;
+        if (!it.str || !it.str.trim()) continue;
         const font = await pool.get(it.fontId, it.bold, it.italic);
-        const x = it.x + alignOffset(font, text, it.size, it.align, it.width);
-        const ok = drawTextSafe(page, text, {
-          x, y: it.y, size: it.size, font, color: hexToRgb(it.color),
-        }, font);
-        if (!ok) warnings.push(`Page ${p + 1}: some characters in "${text.slice(0, 30)}…" were substituted (not supported by the export font).`);
+        for (const { text, y, dx } of itemLines(font, it)) {
+          if (!text.trim()) continue;
+          const x = it.x + dx + alignOffset(font, text, it.size, it.align, it.width);
+          const ok = drawTextSafe(page, text, {
+            x, y, size: it.size, font, color: hexToRgb(it.color),
+          }, font);
+          if (!ok) warnings.push(`Page ${p + 1}: some characters in "${text.slice(0, 30)}…" were substituted (not supported by the export font).`);
+        }
       }
     }
 
@@ -299,8 +339,10 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
       for (const it of state.items) {
         if (it.deleted || !it.str) continue;
         const font = await pool.get(it.fontId, it.bold, it.italic);
-        const x = it.x + alignOffset(font, it.str, it.size, it.align, it.width);
-        linkCount += await linkifyRun(doc, page, pool, it, it.str, x, it.y, it.width || 0);
+        for (const { text, y, dx } of itemLines(font, it)) {
+          const x = it.x + dx + alignOffset(font, text, it.size, it.align, it.width);
+          linkCount += await linkifyRun(doc, page, pool, it, text, x, y, it.width || 0);
+        }
       }
       for (const box of state.newBoxes) {
         if (box.deleted || !box.str) continue;

@@ -4,7 +4,7 @@ import {
   FONTS, DEFAULT_FONT_ID, detectFont, cleanFontName, checkFontAvailability, styleKey,
 } from './fonts.js';
 import { exportPdf } from './exporter.js';
-import { saveDraft, loadDraft, clearDraft } from './draft.js';
+import { saveDraft, loadDraft, listDrafts, deleteDraft } from './draft.js';
 import { extractLines } from './lines.js';
 import { inject } from '@vercel/analytics';
 
@@ -17,6 +17,9 @@ inject();
 
 const state = {
   fileName: null,
+  renamed: false,       // true once the user has renamed the document
+  docId: null,          // autosave record key for the open document
+  thumb: null,          // small page-1 preview stored with the draft
   pdfBytes: null,       // Uint8Array of the loaded file
   pdfDoc: null,         // pdf.js document
   pages: [],            // per page: { viewport, scale, items, newBoxes }
@@ -37,7 +40,8 @@ let lastClickedPage = null; // shift-click range anchor for the pages panel
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  dropzone: $('dropzone'), pages: $('pages'), fileInput: $('file-input'),
+  startPage: $('start-page'), recentGrid: $('recent-grid'), recentEmpty: $('recent-empty'),
+  btnHome: $('btn-home'), docName: $('doc-name'), startOpen: $('start-open'), pages: $('pages'), fileInput: $('file-input'),
   btnOpen: $('btn-open'), btnAddText: $('btn-add-text'), btnExport: $('btn-export'),
   controls: $('text-controls'), ctlFont: $('ctl-font'), ctlSize: $('ctl-size'),
   ctlBold: $('ctl-bold'), ctlItalic: $('ctl-italic'), ctlColor: $('ctl-color'),
@@ -46,13 +50,11 @@ const els = {
   multiSelectLabel: $('multi-select-label'),
   btnUndo: $('btn-undo'), btnRedo: $('btn-redo'),
   btnZoomIn: $('btn-zoom-in'), btnZoomOut: $('btn-zoom-out'), zoomLabel: $('zoom-label'),
-  ctlDuplicate: $('ctl-duplicate'), ctlLinks: $('ctl-links'), ctlFormatPainter: $('ctl-format-painter'),
+  ctlDuplicate: $('ctl-duplicate'), ctlAlignEdges: $('ctl-align-edges'), ctlMerge: $('ctl-merge'), ctlLinks: $('ctl-links'), ctlFormatPainter: $('ctl-format-painter'),
   pagesGrid: $('pages-grid'), pagesPanelHint: $('pages-panel-hint'), btnDeletePages: $('btn-delete-pages'),
   confirmModal: $('confirm-modal'), confirmText: $('confirm-modal-text'),
   confirmCancel: $('confirm-cancel'), confirmOk: $('confirm-ok'),
   autosaveIndicator: $('autosave-indicator'),
-  restoreBanner: $('restore-banner'), restoreBannerText: $('restore-banner-text'),
-  btnDiscardDraft: $('btn-discard-draft'),
 };
 
 // ---------- helpers ----------
@@ -70,33 +72,17 @@ function cssFontFor(item) {
 // ---------- file loading ----------
 
 async function loadFile(file) {
-  // Set before any await: blocks the async draft check (still in flight from
-  // startup) from re-showing the banner after the user has already moved on.
-  draftPromptSuppressed = true;
   if (!file || !/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') {
     status('Please choose a PDF file.', true);
     return;
   }
   status(`Loading ${file.name}…`);
-  hideRestoreBanner();
   const bytes = new Uint8Array(await file.arrayBuffer());
+  resetDocument();
   state.fileName = file.name;
+  syncDocName();
   state.pdfBytes = bytes;
-  state.pages = [];
-  state.detectedFonts = new Map();
-  state.selected = null;
-  history.undo.length = 0;
-  history.redo.length = 0;
-  updateUndoButtons();
-  state.clipboard = null;
-  stopFormatPainter();
-  state.multiSelected.clear();
-  state.pageOrder = [];
-  state.selectedPages.clear();
-  lastClickedPage = null;
-  els.pages.innerHTML = '';
-  els.pagesGrid.innerHTML = '';
-  els.btnDeletePages.disabled = true;
+  state.docId = crypto.randomUUID();
 
   try {
     // pdf.js transfers the buffer to its worker, so hand it a copy.
@@ -106,11 +92,11 @@ async function loadFile(file) {
     return;
   }
 
-  els.dropzone.classList.add('hidden');
-  els.pagesPanelHint.hidden = true;
+  hideStartPage();
   for (let p = 1; p <= state.pdfDoc.numPages; p++) {
     await renderPage(p);
   }
+  attachThumb();
   els.btnExport.disabled = false;
   els.btnAddText.disabled = false;
   els.btnZoomIn.disabled = state.zoomIdx === ZOOM_LEVELS.length - 1;
@@ -120,6 +106,75 @@ async function loadFile(file) {
 }
 
 // ---------- text extraction ----------
+
+const BULLET_START = /^\s*(?:[•▪◦●·*\-–—]|\d{1,2}[.)])\s/;
+const CONTINUATION_START = /^[a-z0-9(\[,;.)&]/;
+
+// Join lines that were only split by word-wrap back into one paragraph item,
+// so editing a wrapped bullet reflows instead of leaving stray half-boxes.
+// Two stacked lines (same font/size, normal leading) belong together when the
+// lower one doesn't start a new bullet, sits under the upper one's left edge
+// (or, for a bullet, at its hanging indent), and reads as a continuation: it
+// starts lowercase/with a digit, continues a bullet, or the upper line ran
+// full-width. `lines` must be sorted top-to-bottom (as extractItems sorts).
+function groupParagraphs(lines, pageWidth) {
+  const rights = lines.filter((l) => l.width > pageWidth * 0.45).map((l) => l.x + l.width).sort((a, b) => a - b);
+  const margin = rights.length ? rights[Math.floor((rights.length - 1) * 0.75)] : null;
+  const next = new Map();
+  const hasPrev = new Set();
+  const bulletChain = new Set(); // lines belonging to a chain that started with a bullet
+
+  for (const a of lines) {
+    const aHead = !hasPrev.has(a);
+    if (aHead && BULLET_START.test(a.str)) bulletChain.add(a);
+    let best = null;
+    let bestHanging = false;
+    for (const b of lines) {
+      if (b === a || hasPrev.has(b)) continue;
+      const gap = a.y - b.y;
+      if (gap < a.size * 0.95 || gap > a.size * 1.75) continue;
+      if (b.fontRaw !== a.fontRaw || Math.abs(b.size - a.size) > 0.5) continue;
+      if (BULLET_START.test(b.str)) continue;
+      const dx = b.x - a.x;
+      const aligned = Math.abs(dx) <= a.size * 0.6;
+      const hanging = aHead && bulletChain.has(a) && dx > a.size * 0.3 && dx < a.size * 4;
+      if (!aligned && !hanging) continue;
+      if (!best || gap < a.y - best.y) { best = b; bestHanging = hanging && !aligned; }
+    }
+    if (!best) continue;
+    const right = a.x + a.width;
+    const firstWord = best.str.trim().split(/\s+/)[0];
+    const wordW = best.width * (firstWord.length / Math.max(best.str.length, 1));
+    const limit = margin ?? Math.max(right, best.x + best.width);
+    const full = right >= limit - wordW - a.size * 0.6;
+    if (!(bestHanging || bulletChain.has(a) || CONTINUATION_START.test(best.str.trim()) || full)) continue;
+    next.set(a, best);
+    hasPrev.add(best);
+    if (bulletChain.has(a)) bulletChain.add(best);
+  }
+
+  const out = [];
+  for (const line of lines) {
+    if (hasPrev.has(line)) continue;
+    if (!next.has(line)) { out.push(line); continue; }
+    const chain = [line];
+    while (next.has(chain[chain.length - 1])) chain.push(next.get(chain[chain.length - 1]));
+    const leading = (line.y - chain[chain.length - 1].y) / (chain.length - 1);
+    const indent = chain[1].x - line.x > line.size * 0.3 ? chain[1].x - line.x : 0;
+    out.push({
+      ...line,
+      str: chain.map((c, i) => (i && !chain[i - 1].str.endsWith('-') ? ' ' : '') + c.str.trim()).join(''),
+      width: Math.max(...chain.map((c) => c.x + c.width)) - line.x,
+      para: {
+        lines: chain.map((c) => c.str.trim()),
+        leading,
+        indent,
+        height: (chain.length - 1) * leading + line.size * 1.25,
+      },
+    });
+  }
+  return out;
+}
 
 // Pull positioned text runs out of a pdf.js page and merge fragments that sit
 // on the same baseline with the same font into editable line segments.
@@ -167,8 +222,8 @@ async function extractItems(page) {
     }
   }
 
-  return merged
-    .filter((m) => m.str.trim().length > 0)
+  const pageWidth = page.getViewport({ scale: 1 }).width;
+  return groupParagraphs(merged.filter((m) => m.str.trim().length > 0), pageWidth)
     .map((m) => {
       const det = detectFont(m.fontRaw);
       const rec = state.detectedFonts.get(cleanFontName(m.fontRaw)) || { ...det, count: 0 };
@@ -178,7 +233,11 @@ async function extractItems(page) {
         id: state.nextId++,
         str: m.str, original: m.str,
         x: m.x, y: m.y, ox: m.x, oy: m.y, osize: m.size, owidth: m.width,
-        size: m.size, width: m.width,
+        size: m.size, width: m.para ? m.width + m.size * 0.4 : m.width,
+        ...(m.para ? {
+          para: true, leading: m.para.leading, plines: m.para.lines,
+          oheight: m.para.height, indent: m.para.indent, owrap: m.width + m.size * 0.4,
+        } : {}),
         fontId: det.fontId, bold: det.bold, italic: det.italic,
         fontRaw: cleanFontName(m.fontRaw),
         color: '#000000', align: 'left',
@@ -457,7 +516,7 @@ function closeConfirmModal() {
 const ITEM_FIELDS = [
   'id', 'str', 'original', 'x', 'y', 'ox', 'oy', 'osize', 'owidth', 'size', 'width',
   'fontId', 'bold', 'italic', 'color', 'align', 'edited', 'deleted', 'isNew', 'fontRaw',
-  'height', 'oheight', 'isLine',
+  'height', 'oheight', 'isLine', 'para', 'leading', 'plines', 'owrap', 'indent',
 ];
 
 function serializeItem(it) {
@@ -468,8 +527,11 @@ function serializeItem(it) {
 
 function buildDraftSnapshot() {
   return {
+    docId: state.docId,
     fileName: state.fileName,
+    renamed: state.renamed,
     pdfBytes: state.pdfBytes,
+    thumb: state.thumb,
     pageOrder: state.pageOrder.slice(),
     pages: state.pages.map((ps) => ({
       items: ps.items.map(serializeItem),
@@ -478,6 +540,26 @@ function buildDraftSnapshot() {
     })),
     savedAt: Date.now(),
   };
+}
+
+// Render page 1 to a small JPEG for the start page card. Saved with the draft
+// (a newly opened file shows up in Recent right away, even before any edit).
+async function attachThumb() {
+  const docId = state.docId;
+  try {
+    const page = await state.pdfDoc.getPage(1);
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: 320 / base.width });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    if (state.docId !== docId) return;
+    state.thumb = canvas.toDataURL('image/jpeg', 0.7);
+  } catch (err) {
+    console.warn('Could not build thumbnail', err);
+  }
+  if (state.docId === docId) markDirty();
 }
 
 let autosaveDirty = false;
@@ -505,33 +587,14 @@ window.addEventListener('beforeunload', () => {
   flushAutosave();
 });
 
-// True once the user has taken any action (loaded a file or discarded a
-// draft) that makes the startup draft check's result stale.
-let draftPromptSuppressed = false;
-let restoredBannerTimer = null;
-
-function hideRestoreBanner() {
-  els.restoreBanner.hidden = true;
-  clearTimeout(restoredBannerTimer);
-}
-
-// Shown briefly after an automatic restore, purely as an FYI — restoring
-// already happened, this just offers a quick way to bail out of it.
-function showRestoredNotice(draft) {
-  const when = new Date(draft.savedAt).toLocaleString();
-  els.restoreBannerText.textContent = `Restored your previous session for "${draft.fileName}" (autosaved ${when}).`;
-  els.restoreBanner.hidden = false;
-  clearTimeout(restoredBannerTimer);
-  restoredBannerTimer = setTimeout(hideRestoreBanner, 8000);
-}
-
-// Undo an automatic restore: wipe the stored draft and go back to the empty
-// dropzone, as if the app had just opened with no prior session.
-function discardDraftAndStartOver() {
-  draftPromptSuppressed = true;
-  hideRestoreBanner();
-  clearDraft().catch((err) => console.warn('Could not clear draft', err));
+// Clear all per-document state and the page DOM (used before opening a
+// file, restoring a draft, or going back to the start page).
+function resetDocument() {
   state.fileName = null;
+  state.renamed = false;
+  syncDocName();
+  state.docId = null;
+  state.thumb = null;
   state.pdfBytes = null;
   state.pdfDoc = null;
   state.pages = [];
@@ -549,59 +612,124 @@ function discardDraftAndStartOver() {
   els.pages.innerHTML = '';
   els.pagesGrid.innerHTML = '';
   els.btnDeletePages.disabled = true;
-  els.pagesPanelHint.hidden = false;
-  els.dropzone.classList.remove('hidden');
   els.btnExport.disabled = true;
   els.btnAddText.disabled = true;
+  els.btnZoomIn.disabled = true;
+  els.btnZoomOut.disabled = true;
   els.fontReport.hidden = true;
-  status('Discarded — start fresh whenever you\'re ready.');
 }
 
-// Auto-restore on startup, Google-Docs style: no confirmation click needed.
-// If the user has already started loading their own file by the time this
-// resolves, draftPromptSuppressed blocks it from clobbering their choice.
-async function checkForDraft() {
-  try {
-    const draft = await loadDraft();
-    if (draftPromptSuppressed || !draft?.pdfBytes || !draft.fileName) return;
-    await restoreDraft(draft);
-    if (draftPromptSuppressed) return; // user loaded something else mid-restore
-    showRestoredNotice(draft);
-  } catch (err) {
-    console.warn('Could not restore the saved draft', err);
+// ---------- rename ----------
+
+function syncDocName() {
+  els.docName.value = state.fileName ? state.fileName.replace(/\.pdf$/i, '') : '';
+}
+
+function commitRename() {
+  const name = els.docName.value.replace(/[\\/:*?"<>|]/g, '').trim();
+  if (!state.fileName || !name) { syncDocName(); return; }
+  const fileName = `${name}.pdf`;
+  if (fileName !== state.fileName) {
+    state.fileName = fileName;
+    state.renamed = true;
+    markDirty();
+  }
+  syncDocName();
+}
+
+// ---------- start page ----------
+
+function hideStartPage() {
+  els.startPage.classList.add('hidden');
+  $('toolbar').classList.remove('hidden');
+  els.pagesPanelHint.hidden = true;
+}
+
+async function showStartPage() {
+  els.startPage.classList.remove('hidden');
+  $('toolbar').classList.add('hidden');
+  els.pagesPanelHint.hidden = false;
+  status('');
+  await renderRecent();
+}
+
+async function renderRecent() {
+  let drafts = [];
+  try { drafts = await listDrafts(); } catch (err) { console.warn('Could not list drafts', err); }
+  els.recentGrid.innerHTML = '';
+  els.recentEmpty.hidden = drafts.length > 0;
+  for (const d of drafts) {
+    const item = document.createElement('div');
+    item.className = 'recent-item';
+
+    const card = document.createElement('button');
+    card.className = 'start-card';
+    const thumb = document.createElement('span');
+    thumb.className = 'start-thumb';
+    if (d.thumb) {
+      const img = document.createElement('img');
+      img.src = d.thumb;
+      img.alt = '';
+      thumb.appendChild(img);
+    }
+    const name = document.createElement('span');
+    name.className = 'start-name';
+    name.textContent = d.fileName;
+    name.title = d.fileName;
+    const meta = document.createElement('span');
+    meta.className = 'start-meta';
+    meta.textContent = `Edited ${new Date(d.savedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`;
+    card.append(thumb, name, meta);
+    card.addEventListener('click', () => restoreDraft(d));
+
+    const del = document.createElement('button');
+    del.className = 'recent-delete';
+    del.textContent = '✕';
+    del.title = 'Remove from recent documents';
+    del.addEventListener('click', () => {
+      openConfirmModal(`Remove "${d.fileName}" and its autosaved edits?`, async () => {
+        await deleteDraft(d.docId).catch((err) => console.warn('Could not delete draft', err));
+        renderRecent();
+      });
+    });
+
+    item.append(card, del);
+    els.recentGrid.appendChild(item);
   }
 }
 
-async function restoreDraft(draft) {
+async function goHome() {
+  if (!state.pdfBytes) return;
+  if (state.selected) commitEdit(state.selected);
+  markDirty();
+  await flushAutosave();
+  resetDocument();
+  await showStartPage();
+}
+
+async function restoreDraft(summary) {
+  // Cards carry the whole record already, but reload in case it changed.
+  const draft = await loadDraft(summary.docId) || summary;
   status(`Restoring ${draft.fileName}…`);
   const bytes = draft.pdfBytes instanceof Uint8Array ? draft.pdfBytes : new Uint8Array(draft.pdfBytes);
+  resetDocument();
   state.fileName = draft.fileName;
+  state.renamed = !!draft.renamed;
+  syncDocName();
   state.pdfBytes = bytes;
-  state.pages = [];
-  state.detectedFonts = new Map();
-  state.selected = null;
-  history.undo.length = 0;
-  history.redo.length = 0;
-  updateUndoButtons();
-  state.clipboard = null;
-  stopFormatPainter();
-  state.multiSelected.clear();
-  state.pageOrder = [];
-  state.selectedPages.clear();
-  lastClickedPage = null;
-  els.pages.innerHTML = '';
-  els.pagesGrid.innerHTML = '';
-  els.btnDeletePages.disabled = true;
+  state.docId = draft.docId;
+  state.thumb = draft.thumb || null;
 
   try {
     state.pdfDoc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
   } catch (err) {
     status(`Could not restore draft: ${err.message}`, true);
+    resetDocument();
+    showStartPage();
     return;
   }
 
-  els.dropzone.classList.add('hidden');
-  els.pagesPanelHint.hidden = true;
+  hideStartPage();
   for (let p = 1; p <= state.pdfDoc.numPages; p++) {
     await renderPage(p);
   }
@@ -665,6 +793,24 @@ function positionEl(pageState, item, el) {
     el.style.width = '';
   }
   el.style.minHeight = `${fontPx * 1.1}px`;
+  el.classList.toggle('para-box', !!item.para);
+  el.style.paddingLeft = '';
+  el.style.textIndent = '';
+  if (item.para) {
+    // Wrapped paragraph: fixed width, original line spacing, and tall enough
+    // to cover every original line so shrinking the text can't reveal them.
+    const lead = item.leading * pageState.scale;
+    el.style.width = `${item.width * pageState.scale}px`;
+    el.style.minWidth = '';
+    el.style.lineHeight = `${lead}px`;
+    el.style.minHeight = `${item.oheight * pageState.scale}px`;
+    el.style.top = `${vy - fontPx * 0.88 - (lead - fontPx * 1.1) / 2}px`;
+    if (item.indent) {
+      // Hanging indent: first line flush, wrapped lines pushed in.
+      el.style.paddingLeft = `${item.indent * pageState.scale}px`;
+      el.style.textIndent = `${-item.indent * pageState.scale}px`;
+    }
+  }
   el.style.fontFamily = cssFontFor(item);
   el.style.fontWeight = item.bold ? '700' : '400';
   el.style.fontStyle = item.italic ? 'italic' : 'normal';
@@ -674,7 +820,7 @@ function positionEl(pageState, item, el) {
 
 function mountItem(pageState, item) {
   const el = document.createElement('div');
-  el.className = 'text-item' + (item.isNew ? ' new-box' : '');
+  el.className = 'text-item' + (item.isNew ? ' new-box' : '') + (item.para ? ' para-box' : '');
   el.dataset.id = item.id;
   positionEl(pageState, item, el);
   pageState.overlay.appendChild(el);
@@ -700,9 +846,9 @@ function mountItem(pageState, item) {
       return;
     }
     if (state.multiSelected.has(item)) {
-      // Part of an active group selection — keep the group intact instead
-      // of dropping into single-item edit/drag.
+      // Part of an active group selection — drag moves the whole group.
       e.preventDefault();
+      startGroupDrag(e);
       return;
     }
     if (state.multiSelected.size) clearMultiSelection();
@@ -781,6 +927,7 @@ function mountLine(pageState, line) {
     }
     if (state.multiSelected.has(line)) {
       e.preventDefault();
+      startGroupDrag(e);
       return;
     }
     if (state.multiSelected.size) clearMultiSelection();
@@ -795,7 +942,7 @@ function mountLine(pageState, line) {
 // ---------- undo / redo ----------
 
 const history = { undo: [], redo: [] };
-const SNAP_PROPS = ['str', 'x', 'y', 'size', 'width', 'fontId', 'bold', 'italic', 'color', 'align', 'edited', 'deleted'];
+const SNAP_PROPS = ['str', 'x', 'y', 'size', 'width', 'fontId', 'bold', 'italic', 'color', 'align', 'edited', 'deleted', 'para', 'leading', 'oheight', 'indent'];
 
 function snapshot(item) {
   const s = {};
@@ -809,9 +956,12 @@ function sameSnapshot(a, b) {
 
 // Record a completed mutation of `item`; `before` was captured pre-mutation.
 // kind 'nudge' coalesces rapid consecutive entries on the same item into one.
+let historyBatch = null; // while set, pushHistory collects entries into one undo step
+
 function pushHistory(item, before, kind) {
   const after = snapshot(item);
   if (sameSnapshot(before, after)) return;
+  if (historyBatch) { historyBatch.push({ item, before, after }); return; }
   const top = history.undo[history.undo.length - 1];
   if (kind === 'nudge' && top?.kind === 'nudge' && top.item === item && Date.now() - top.at < 900) {
     top.after = after;
@@ -822,6 +972,21 @@ function pushHistory(item, before, kind) {
   history.redo.length = 0;
   updateUndoButtons();
   markDirty();
+}
+
+// Run fn, then record everything it pushed as a single undo step.
+function inHistoryBatch(fn) {
+  historyBatch = [];
+  try { fn(); } finally {
+    const batch = historyBatch;
+    historyBatch = null;
+    if (batch.length) {
+      history.undo.push({ batch, at: Date.now() });
+      history.redo.length = 0;
+      updateUndoButtons();
+      markDirty();
+    }
+  }
 }
 
 function restore(item, snap) {
@@ -837,7 +1002,8 @@ function restore(item, snap) {
 function undo() {
   const entry = history.undo.pop();
   if (!entry) return;
-  restore(entry.item, entry.before);
+  if (entry.batch) for (const e of entry.batch) restore(e.item, e.before);
+  else restore(entry.item, entry.before);
   history.redo.push(entry);
   updateUndoButtons();
 }
@@ -845,7 +1011,8 @@ function undo() {
 function redo() {
   const entry = history.redo.pop();
   if (!entry) return;
-  restore(entry.item, entry.after);
+  if (entry.batch) for (const e of entry.batch) restore(e.item, e.after);
+  else restore(entry.item, entry.after);
   history.undo.push(entry);
   updateUndoButtons();
 }
@@ -967,6 +1134,48 @@ function startDragMove(item, e) {
   document.addEventListener('mouseup', onUp);
 }
 
+// Drag every multi-selected item together, keeping their relative layout.
+function startGroupDrag(e) {
+  const members = [...state.multiSelected].filter((it) => !it.deleted);
+  const startX = e.clientX, startY = e.clientY;
+  const starts = members.map((it) => ({ it, x: it.x, y: it.y, before: snapshot(it) }));
+  let dragging = false;
+
+  const place = (it) => {
+    if (it.isLine) positionLineEl(it.pageState, it, it.el);
+    else positionEl(it.pageState, it, it.el);
+  };
+  const onMove = (ev) => {
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    if (!dragging && Math.hypot(dx, dy) < 4) return;
+    dragging = true;
+    for (const s of starts) {
+      const { scale } = s.it.pageState;
+      s.it.x = s.x + dx / scale;
+      s.it.y = s.y - dy / scale; // PDF y-axis points up
+      place(s.it);
+    }
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    if (!dragging) return;
+    inHistoryBatch(() => {
+      for (const s of starts) {
+        if (s.it.isLine) refreshLineView(s.it);
+        else {
+          if (!s.it.isNew) s.it.edited = true;
+          refreshItemView(s.it);
+        }
+        pushHistory(s.it, s.before);
+      }
+    });
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
 function startResize(item, e) {
   e.stopPropagation();
   e.preventDefault();
@@ -980,7 +1189,9 @@ function startResize(item, e) {
     item.size = Math.min(96, Math.max(4, startSize + dy / scale));
     if (!item.isNew) item.edited = true;
     positionEl(item.pageState, item, item.el);
-    refreshItemView(item);
+    // Mid-edit the box holds uncommitted text; re-rendering from item.str
+    // would wipe it.
+    if (!item.el.classList.contains('editing')) refreshItemView(item);
     updateHandle();
     els.ctlSize.value = +item.size.toFixed(1);
   };
@@ -1005,6 +1216,7 @@ function startWidthResize(item, e) {
   const onMove = (ev) => {
     const dx = ev.clientX - startX;
     item.width = Math.max(30, startWidth + dx / scale);
+    if (item.para) item.edited = true;
     positionEl(item.pageState, item, item.el);
     updateHandle();
   };
@@ -1041,7 +1253,7 @@ function updateHandle() {
       if (state.selected) startWidthResize(state.selected, e);
     });
   }
-  if (!item || item.deleted || item.isLine || item.el.classList.contains('editing')) {
+  if (!item || item.deleted || item.isLine) {
     handleEl.remove();
     widthHandleEl.remove();
     return;
@@ -1051,7 +1263,7 @@ function updateHandle() {
   handleEl.style.left = `${el.offsetLeft + el.offsetWidth - 5}px`;
   handleEl.style.top = `${el.offsetTop + el.offsetHeight - 5}px`;
 
-  if (item.isNew) {
+  if (item.isNew || item.para) {
     item.pageState.overlay.appendChild(widthHandleEl);
     widthHandleEl.style.left = `${el.offsetLeft + el.offsetWidth - 5}px`;
     widthHandleEl.style.top = `${el.offsetTop + el.offsetHeight / 2 - 5}px`;
@@ -1086,7 +1298,7 @@ function positionMask(item) {
   item.maskEl.style.left = `${vx - 1}px`;
   item.maskEl.style.top = `${vy - fontPx * 0.92}px`;
   item.maskEl.style.width = `${item.owidth * scale + 3}px`;
-  item.maskEl.style.height = `${fontPx * 1.25}px`;
+  item.maskEl.style.height = `${item.para ? item.oheight * scale : fontPx * 1.25}px`;
 }
 
 // Reflect the item's committed state in the overlay (covering the canvas text
@@ -1128,7 +1340,16 @@ function beginEdit(item) {
   if (!el.dataset.wired) {
     el.dataset.wired = '1';
     el.addEventListener('blur', () => commitEdit(item));
+    el.addEventListener('input', updateHandle); // box grows/shrinks as you type
     el.addEventListener('keydown', (e) => {
+      if (isBulletShortcut(e)) {
+        e.preventDefault();
+        el.textContent = toggleBulletText(el.textContent);
+        const sel = window.getSelection();
+        sel.selectAllChildren(el);
+        sel.collapseToEnd();
+        return;
+      }
       if (e.key === 'Enter' && !item.isNew) { e.preventDefault(); el.blur(); }
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -1137,6 +1358,37 @@ function beginEdit(item) {
       }
     });
   }
+}
+
+// Cmd/Ctrl+Shift+8: add a "• " to each non-empty line, or strip them if every
+// line already has one.
+const BULLET_RE = /^•\s/;
+function toggleBulletText(text) {
+  const lines = text.split('\n');
+  const filled = lines.filter((l) => l.trim());
+  const remove = filled.length > 0 && filled.every((l) => BULLET_RE.test(l));
+  return lines.map((l) => {
+    if (!l.trim()) return l;
+    return remove ? l.replace(BULLET_RE, '') : (BULLET_RE.test(l) ? l : `• ${l}`);
+  }).join('\n');
+}
+
+function isBulletShortcut(e) {
+  return (e.metaKey || e.ctrlKey) && e.shiftKey && e.code === 'Digit8';
+}
+
+// Toggle bullets on a selected (not currently being edited) text item.
+function toggleBulletOnSelected() {
+  const item = state.selected;
+  if (!item || item.isLine || item.deleted) return;
+  const snap = snapshot(item);
+  const next = toggleBulletText(item.str);
+  if (next === item.str) return;
+  item.str = next;
+  item.edited = true;
+  refreshItemView(item);
+  updateHandle();
+  pushHistory(item, snap);
 }
 
 function commitEdit(item) {
@@ -1212,13 +1464,15 @@ function deleteSelected() {
   if (state.multiSelected.size) {
     const items = [...state.multiSelected];
     clearMultiSelection();
-    for (const it of items) {
-      const before = snapshot(it);
-      it.deleted = true;
-      it.edited = true;
-      if (it.isLine) refreshLineView(it); else refreshItemView(it);
-      pushHistory(it, before);
-    }
+    inHistoryBatch(() => {
+      for (const it of items) {
+        const before = snapshot(it);
+        it.deleted = true;
+        it.edited = true;
+        if (it.isLine) refreshLineView(it); else refreshItemView(it);
+        pushHistory(it, before);
+      }
+    });
     status(`Deleted ${items.length} item${items.length > 1 ? 's' : ''}.`);
     return;
   }
@@ -1265,11 +1519,85 @@ function updateMultiSelectUI() {
     els.multiSelectLabel.hidden = false;
     els.multiSelectLabel.textContent = `${n} selected`;
     for (const el of TEXT_ONLY_CONTROLS) el.hidden = true;
+    els.ctlAlignEdges.hidden = n < 2;
+    els.ctlMerge.hidden = n < 2;
   } else {
     els.multiSelectLabel.hidden = true;
+    els.ctlAlignEdges.hidden = true;
+    els.ctlMerge.hidden = true;
     for (const el of TEXT_ONLY_CONTROLS) el.hidden = false;
     els.controls.hidden = !state.selected;
   }
+}
+
+// Merge the selected text boxes (top to bottom) into the topmost one, as a
+// single paragraph that wraps to the widest box. The others are deleted.
+function mergeSelected() {
+  const items = [...state.multiSelected].filter((it) => !it.deleted && !it.isLine);
+  if (items.length < 2) { status('Select at least two text boxes to merge.', true); return; }
+  if (new Set(items.map((it) => it.pageState)).size > 1) {
+    status('Boxes on different pages can\'t be merged.', true);
+    return;
+  }
+  items.sort((a, b) => (Math.abs(b.y - a.y) > a.size * 0.5 ? b.y - a.y : a.x - b.x));
+  const head = items[0];
+  const rest = items.slice(1);
+  const snaps = new Map(items.map((it) => [it, snapshot(it)]));
+
+  inHistoryBatch(() => {
+    const right = Math.max(...items.map((it) => it.x + it.width));
+    head.str = items.map((it, i) => (i && !items[i - 1].str.trimEnd().endsWith('-') ? ' ' : '') + it.str.trim()).join('');
+    head.width = right - head.x;
+    if (!head.isNew) {
+      if (!head.para) {
+        const gap = head.y - rest[0].y;
+        head.para = true;
+        head.leading = gap >= head.size * 0.9 && gap <= head.size * 2 ? gap : head.size * 1.2;
+        head.oheight = head.size * 1.25;
+      }
+      head.edited = true;
+    }
+    positionEl(head.pageState, head, head.el);
+    refreshItemView(head);
+    pushHistory(head, snaps.get(head));
+    for (const it of rest) {
+      it.deleted = true;
+      it.edited = true;
+      refreshItemView(it);
+      pushHistory(it, snaps.get(it));
+    }
+  });
+
+  clearMultiSelection();
+  selectItem(head);
+  status(`Merged ${items.length} text boxes into one.`);
+}
+
+// Snap the left edge of every multi-selected text box to the leftmost one on
+// its page. Only x changes, so each box keeps its vertical position.
+function alignLeftEdges() {
+  const boxes = [...state.multiSelected].filter((it) => !it.deleted && !it.isLine);
+  const byPage = new Map();
+  for (const it of boxes) {
+    if (!byPage.has(it.pageState)) byPage.set(it.pageState, []);
+    byPage.get(it.pageState).push(it);
+  }
+  let moved = 0;
+  inHistoryBatch(() => { for (const group of byPage.values()) {
+    const left = Math.min(...group.map((it) => it.x));
+    for (const it of group) {
+      if (it.x === left) continue;
+      const before = snapshot(it);
+      it.x = left;
+      if (!it.isNew) it.edited = true;
+      positionEl(it.pageState, it, it.el);
+      refreshItemView(it);
+      pushHistory(it, before);
+      moved++;
+    }
+  } });
+  updateHandle();
+  status(moved ? `Aligned ${moved} text box${moved > 1 ? 'es' : ''} to the left edge.` : 'Already aligned.');
 }
 
 // Click-drag on empty page space to select every item the rectangle touches.
@@ -1278,6 +1606,7 @@ function startMarqueeSelect(pageState, e) {
   const rect = pageState.overlay.getBoundingClientRect();
   const startX = e.clientX - rect.left;
   const startY = e.clientY - rect.top;
+  const additive = e.metaKey || e.ctrlKey || e.shiftKey;
   let dragging = false;
   let marqueeEl = null;
 
@@ -1300,9 +1629,13 @@ function startMarqueeSelect(pageState, e) {
   const onUp = () => {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    // Cmd/Ctrl/Shift-drag adds to the current selection instead of replacing it.
+    if (additive && !dragging) return;
+    const prior = state.selected;
     if (state.selected) commitEdit(state.selected);
     selectItem(null);
-    clearMultiSelection();
+    if (!additive) clearMultiSelection();
+    else if (prior && !prior.deleted) addToMultiSelection(prior);
     if (dragging && marqueeEl) {
       const mLeft = parseFloat(marqueeEl.style.left);
       const mTop = parseFloat(marqueeEl.style.top);
@@ -1526,7 +1859,7 @@ async function doExport() {
     const blob = new Blob([bytes], { type: 'application/pdf' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = state.fileName.replace(/\.pdf$/i, '') + '-edited.pdf';
+    a.download = state.fileName.replace(/\.pdf$/i, '') + (state.renamed ? '.pdf' : '-edited.pdf');
     a.click();
     URL.revokeObjectURL(a.href);
 
@@ -1565,7 +1898,7 @@ function init() {
 
   // Register drag & drop on body only — a drop on the dropzone bubbles up to
   // body, so listening on both fired loadFile twice (pages rendered twice).
-  const dz = els.dropzone;
+  const dz = els.startPage;
   document.body.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('dragging'); });
   document.body.addEventListener('dragleave', () => dz.classList.remove('dragging'));
   document.body.addEventListener('drop', (e) => {
@@ -1594,7 +1927,13 @@ function init() {
     if (e.target === els.confirmModal) closeConfirmModal();
   });
 
-  els.btnDiscardDraft.addEventListener('click', discardDraftAndStartOver);
+  els.btnHome.addEventListener('click', goHome);
+  els.docName.addEventListener('blur', commitRename);
+  els.docName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') els.docName.blur();
+    else if (e.key === 'Escape') { syncDocName(); els.docName.blur(); }
+  });
+  els.startOpen.addEventListener('click', () => els.fileInput.click());
   els.ctlLinks.checked = localStorage.getItem('linkify') !== '0';
   els.ctlLinks.addEventListener('change', () => localStorage.setItem('linkify', els.ctlLinks.checked ? '1' : '0'));
 
@@ -1617,6 +1956,8 @@ function init() {
     });
   }
   els.ctlDelete.addEventListener('click', deleteSelected);
+  els.ctlAlignEdges.addEventListener('click', alignLeftEdges);
+  els.ctlMerge.addEventListener('click', mergeSelected);
 
   els.btnUndo.addEventListener('click', undo);
   els.btnRedo.addEventListener('click', redo);
@@ -1652,6 +1993,8 @@ function init() {
       return;
     }
 
+    if (isBulletShortcut(e) && state.selected) { e.preventDefault(); toggleBulletOnSelected(); return; }
+
     if (e.metaKey || e.ctrlKey) {
       const k = e.key.toLowerCase();
       if (k === 'z' && e.shiftKey) { e.preventDefault(); redo(); }
@@ -1669,4 +2012,4 @@ function init() {
 }
 
 init();
-checkForDraft();
+showStartPage();

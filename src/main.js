@@ -1762,14 +1762,15 @@ function pasteClipboard() {
 
 const NUDGE_KEYS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
-function nudgeSelected(key, big) {
-  const item = state.selected;
-  if (!item || item.deleted) return false;
-  const [dx, dy] = NUDGE_KEYS[key];
-  const step = (big ? 10 : 1) / item.pageState.scale; // 1 or 10 screen px
-  const before = snapshot(item);
-  item.x += dx * step;
-  item.y -= dy * step; // PDF y-axis points up
+// Steps are in PDF points, independent of zoom: 1pt, Shift = 10pt, Alt = 0.1pt.
+function nudgeStep(ev) {
+  if (ev.altKey) return 0.1;
+  return ev.shiftKey ? 10 : 1;
+}
+
+function nudgeItem(item, dx, dy) {
+  item.x += dx;
+  item.y -= dy; // PDF y-axis points up
   if (item.isLine) {
     refreshLineView(item);
   } else {
@@ -1777,6 +1778,41 @@ function nudgeSelected(key, big) {
     positionEl(item.pageState, item, item.el);
     refreshItemView(item);
   }
+}
+
+function nudgeSelected(ev) {
+  const [ux, uy] = NUDGE_KEYS[ev.key];
+  const step = nudgeStep(ev);
+  const dx = ux * step, dy = uy * step;
+
+  if (state.multiSelected.size) {
+    const items = [...state.multiSelected].filter((it) => !it.deleted);
+    if (!items.length) return false;
+    const befores = items.map(snapshot);
+    for (const it of items) nudgeItem(it, dx, dy);
+    // Coalesce rapid repeats on the same group into one undo step.
+    const top = history.undo[history.undo.length - 1];
+    const same = top?.kind === 'nudge' && top.batch && top.batch.length === items.length
+      && top.batch.every((e, i) => e.item === items[i]) && Date.now() - top.at < 900;
+    if (same) {
+      top.batch.forEach((e, i) => { e.after = snapshot(items[i]); });
+      top.at = Date.now();
+      history.redo.length = 0;
+      markDirty();
+    } else {
+      const batch = items.map((item, i) => ({ item, before: befores[i], after: snapshot(item) }));
+      history.undo.push({ batch, kind: 'nudge', at: Date.now() });
+      history.redo.length = 0;
+      updateUndoButtons();
+      markDirty();
+    }
+    return true;
+  }
+
+  const item = state.selected;
+  if (!item || item.deleted) return false;
+  const before = snapshot(item);
+  nudgeItem(item, dx, dy);
   updateHandle();
   pushHistory(item, before, 'nudge');
   return true;
@@ -2043,7 +2079,7 @@ function init() {
       return;
     }
 
-    if (NUDGE_KEYS[e.key] && nudgeSelected(e.key, e.shiftKey)) e.preventDefault();
+    if (NUDGE_KEYS[e.key] && nudgeSelected(e)) e.preventDefault();
   });
 }
 

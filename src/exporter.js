@@ -301,6 +301,27 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
 
     const anyEdit = state.items.some((it) => it.edited || it.deleted);
 
+    // Decorative lines (section dividers etc.) are vector graphics, not
+    // text — left completely alone unless moved or deleted, in which case
+    // we mask the original spot with white and, if moved, draw a fresh bar
+    // at the new position. Untouched lines' original draw operators are
+    // never touched.
+    // Drawn BEFORE any text so the white mask can't paint over nearby text.
+    for (const ln of state.lines || []) {
+      const moved = ln.x !== ln.ox || ln.y !== ln.oy;
+      if (!ln.deleted && !moved) continue;
+      page.drawRectangle({
+        x: ln.ox - 1, y: ln.oy - 1, width: ln.owidth + 2, height: Math.max(ln.oheight, 0.5) + 2,
+        color: rgb(1, 1, 1),
+      });
+      if (!ln.deleted) {
+        page.drawRectangle({
+          x: ln.x, y: ln.y, width: ln.width, height: Math.max(ln.height, 0.5),
+          color: hexToRgb(ln.color),
+        });
+      }
+    }
+
     if (anyEdit) {
       // Strip every original text object, then redraw ALL text (edited and
       // untouched alike) as fresh, selectable text operators.
@@ -359,26 +380,6 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
           const x = box.x + alignOffset(font, lines[li], box.size, box.align, box.width);
           linkCount += await linkifyRun(doc, page, pool, box, lines[li], x, box.y - li * box.size * 1.25, box.width || 0);
         }
-      }
-    }
-
-    // Decorative lines (section dividers etc.) are vector graphics, not
-    // text — left completely alone unless moved or deleted, in which case
-    // we mask the original spot with white and, if moved, draw a fresh bar
-    // at the new position. Untouched lines' original draw operators are
-    // never touched.
-    for (const ln of state.lines || []) {
-      const moved = ln.x !== ln.ox || ln.y !== ln.oy;
-      if (!ln.deleted && !moved) continue;
-      page.drawRectangle({
-        x: ln.ox - 1, y: ln.oy - 1, width: ln.owidth + 2, height: Math.max(ln.oheight, 0.5) + 2,
-        color: rgb(1, 1, 1),
-      });
-      if (!ln.deleted) {
-        page.drawRectangle({
-          x: ln.x, y: ln.y, width: ln.width, height: Math.max(ln.height, 0.5),
-          color: hexToRgb(ln.color),
-        });
       }
     }
   }

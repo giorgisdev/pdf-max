@@ -301,12 +301,26 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
 
     const anyEdit = state.items.some((it) => it.edited || it.deleted);
 
+    if (anyEdit) {
+      // Strip every original text object, then redraw ALL text (edited and
+      // untouched alike) as fresh, selectable text operators.
+      try {
+        const content = collectContentBytes(doc, page);
+        const stripped = stripTextOperators(content);
+        replacePageContent(doc, page, stripped);
+      } catch (err) {
+        warnings.push(`Page ${p + 1}: could not rewrite content stream (${err.message}); edited text drawn on top of original.`);
+      }
+
+    }
+
     // Decorative lines (section dividers etc.) are vector graphics, not
     // text — left completely alone unless moved or deleted, in which case
     // we mask the original spot with white and, if moved, draw a fresh bar
     // at the new position. Untouched lines' original draw operators are
     // never touched.
-    // Drawn BEFORE any text so the white mask can't paint over nearby text.
+    // Drawn after the content-stream rewrite (which would discard it, and
+    // orphan pdf-lib's cached stream) but BEFORE any text so it can't cover it.
     for (const ln of state.lines || []) {
       const moved = ln.x !== ln.ox || ln.y !== ln.oy;
       if (!ln.deleted && !moved) continue;
@@ -323,16 +337,6 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
     }
 
     if (anyEdit) {
-      // Strip every original text object, then redraw ALL text (edited and
-      // untouched alike) as fresh, selectable text operators.
-      try {
-        const content = collectContentBytes(doc, page);
-        const stripped = stripTextOperators(content);
-        replacePageContent(doc, page, stripped);
-      } catch (err) {
-        warnings.push(`Page ${p + 1}: could not rewrite content stream (${err.message}); edited text drawn on top of original.`);
-      }
-
       for (const it of state.items) {
         if (it.deleted) continue;
         if (!it.str || !it.str.trim()) continue;

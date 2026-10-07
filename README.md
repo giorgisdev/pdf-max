@@ -8,6 +8,8 @@ applicant tracking systems (ATS) then can't read the file. PDF Max keeps
 exported text as real, selectable text with embedded fonts, so the résumé you
 export is the résumé a recruiter's software actually parses.
 
+<img width="1918" height="946" alt="pdf-max" src="https://github.com/user-attachments/assets/36cf72ff-4ec3-423c-89d0-72b40699605f" />
+
 ## What it does
 
 - Click any line of text to edit it in place, with the font, size, bold,

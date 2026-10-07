@@ -1,42 +1,43 @@
-# PDF Resume Editor
+# PDF Max
 
-Localhost PDF editor focused on ATS-safe resume editing. Renders with
-**pdf.js**, edits/exports with **pdf-lib** — exported text is always real,
-selectable, copy-pasteable text with embedded fonts. Nothing is ever
-rasterized.
+A free, in-browser PDF editor for résumés. Live at
+[pdfmax.giorgis.dev](https://pdfmax.giorgis.dev).
 
-## Setup
+Most free PDF editors flatten your edits into images or leave junk behind, and
+applicant tracking systems (ATS) then can't read the file. PDF Max keeps
+exported text as real, selectable text with embedded fonts, so the résumé you
+export is the résumé a recruiter's software actually parses.
+
+## What it does
+
+- Click any line of text to edit it in place, with the font, size, bold,
+  italic and color detected from the original.
+- Wraps text automatically and snaps to a grid when you move things around.
+- Add new text boxes anywhere on the page.
+- Reorder or delete pages, and your work autosaves in the browser.
+- Runs a check before export so you catch problems first.
+- Nothing is rasterized: pages you didn't touch are passed through unchanged.
+
+## How it works
+
+Pages are rendered with [pdf.js](https://mozilla.github.io/pdf.js/) and edited
+and exported with [pdf-lib](https://pdf-lib.js.org/). On a page you edited, the
+original text is removed from the page's content stream and all of that page's
+text is drawn again at the original baselines, with a matching font embedded
+through fontkit. There's no backend, so your PDF stays in your browser.
+
+## Run it locally
 
 ```bash
 npm install
-npm start        # → http://localhost:3000
+npm start    # http://localhost:3000
 ```
 
-## Usage
+Fonts live in `public/fonts/`. See [`public/fonts/README.md`](public/fonts/README.md)
+for which ones are bundled. Anything missing falls back to the closest standard
+PDF font.
 
-1. Drag a PDF onto the drop zone (or click **Select file**).
-2. Click any text line to edit it inline. A toolbar appears with the
-   auto-detected font, size, bold/italic, and color — change any of them.
-   Enter or click away commits; Esc cancels.
-3. **+ Add text**, then click anywhere on a page to place a new text box
-   (multi-line supported with Enter).
-4. **Export PDF** downloads `<name>-edited.pdf`.
+## AI assistance
 
-## How text integrity is preserved
-
-- Pages you didn't touch are passed through byte-for-byte.
-- On an edited page, the original text operators (`BT…ET` blocks) are removed
-  from the content stream — graphics and layout stay — and *all* text on that
-  page is re-drawn as fresh text operators at the original baselines, with the
-  matched font embedded (subset) via fontkit. No hidden duplicate text, no
-  images, fully parseable by ATS scanners.
-
-## Fonts
-
-Drop `.ttf`/`.otf` files into `public/fonts/` — see
-[`public/fonts/README.md`](public/fonts/README.md) for the exact filenames
-(Ibarra Real Nova, Libre Caslon Text, Times New Roman, Symbol, plus the
-standard set). On load, the app parses the PDF's embedded font names and maps
-each text region to the matching family/weight automatically; a banner lists
-every detected font and whether it will use a bundled file or fall back to the
-closest standard font (Helvetica / Times Roman / Symbol).
+I built this with help from generative AI (Anthropic's Claude) for code
+suggestions and debugging.

@@ -4,9 +4,12 @@ import {
   FONTS, DEFAULT_FONT_ID, detectFont, cleanFontName, checkFontAvailability, styleKey,
 } from './fonts.js';
 import { exportPdf, preflightExport } from './exporter.js';
+import { TEMPLATES, buildTemplateFile } from './templates.js';
 import { saveDraft, loadDraft, listDrafts, deleteDraft } from './draft.js';
 import { extractLines } from './lines.js';
 import { inject } from '@vercel/analytics';
+import { initSplash } from './splash.js';
+import { initTheme } from './theme.js';
 
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -41,6 +44,7 @@ let lastClickedPage = null; // shift-click range anchor for the pages panel
 const $ = (id) => document.getElementById(id);
 const els = {
   startPage: $('start-page'), recentGrid: $('recent-grid'), recentEmpty: $('recent-empty'),
+  templateGrid: $('template-grid'),
   btnHome: $('btn-home'), docName: $('doc-name'), startOpen: $('start-open'), pages: $('pages'), fileInput: $('file-input'),
   btnOpen: $('btn-open'), btnAddText: $('btn-add-text'), btnExport: $('btn-export'),
   controls: $('text-controls'), ctlFont: $('ctl-font'), ctlSize: $('ctl-size'),
@@ -655,12 +659,14 @@ function commitRename() {
 
 function hideStartPage() {
   els.startPage.classList.add('hidden');
+  document.body.classList.remove('on-start');
   $('toolbar').classList.remove('hidden');
   els.pagesPanelHint.hidden = true;
 }
 
 async function showStartPage() {
   els.startPage.classList.remove('hidden');
+  document.body.classList.add('on-start');
   $('toolbar').classList.add('hidden');
   els.pagesPanelHint.hidden = false;
   status('');
@@ -710,6 +716,48 @@ async function renderRecent() {
     item.append(card, del);
     els.recentGrid.appendChild(item);
   }
+}
+
+// Template cards sit beside "Open a PDF". The thumbnail is rendered from the
+// generated PDF itself, once, so it can't drift from the real template.
+async function renderTemplates() {
+  for (const tpl of TEMPLATES) {
+    const card = document.createElement('button');
+    card.className = 'start-card';
+    const thumb = document.createElement('span');
+    thumb.className = 'start-thumb';
+    const name = document.createElement('span');
+    name.className = 'start-name';
+    name.textContent = tpl.name;
+    const meta = document.createElement('span');
+    meta.className = 'start-meta';
+    meta.textContent = tpl.subtitle;
+    card.append(thumb, name, meta);
+    card.addEventListener('click', async () => {
+      try { await loadFile(await buildTemplateFile(tpl)); }
+      catch (err) { status(`Could not create template: ${err.message}`, true); }
+    });
+    els.templateGrid.appendChild(card);
+    templateThumb(tpl).then((url) => {
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = '';
+      thumb.appendChild(img);
+    }).catch((err) => console.warn('Template thumbnail failed', err));
+  }
+}
+
+async function templateThumb(tpl) {
+  const file = await buildTemplateFile(tpl);
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  const page = await pdf.getPage(1);
+  const base = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale: 480 / base.width });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  return canvas.toDataURL('image/jpeg', 0.85);
 }
 
 async function goHome() {
@@ -2097,4 +2145,7 @@ function init() {
 }
 
 init();
+initSplash();
+initTheme();
+renderTemplates();
 showStartPage();

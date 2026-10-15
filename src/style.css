@@ -210,7 +210,7 @@ label.checkbox input { accent-color: #2557d6; cursor: pointer; }
 .start-plus { font-size: 64px; color: #2557d6; font-weight: 300; }
 .start-name { font-size: 13.5px; font-weight: 500; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .start-meta { font-size: 12px; color: #5f6368; }
-#recent-grid { display: flex; flex-wrap: wrap; gap: 24px; }
+#template-grid, .start-grid, #recent-grid { display: flex; flex-wrap: wrap; gap: 24px; }
 .recent-item { position: relative; }
 .recent-delete {
   position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border-radius: 50%;

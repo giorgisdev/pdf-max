@@ -4,10 +4,27 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="robots" content="noindex, nofollow" />
-  <title>PDF Resume Editor</title>
+  <title>PDF Max</title>
   <link rel="stylesheet" href="/src/style.css" />
+  <link rel="stylesheet" href="/src/splash.css" />
+  <link rel="stylesheet" href="/src/theme.css" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <script>
+    // Dark by default; on phones/tablets follow the system setting. A saved choice always wins.
+    try {
+      var saved = localStorage.getItem("theme");
+      var mobile = matchMedia("(max-width: 768px)").matches || matchMedia("(pointer: coarse)").matches;
+      var dark = saved ? saved === "dark" : (mobile ? matchMedia("(prefers-color-scheme: dark)").matches : true);
+      if (dark) document.documentElement.dataset.theme = "dark";
+    } catch (e) { document.documentElement.dataset.theme = "dark"; }
+  </script>
 </head>
 <body>
+  <a id="home-link" href="https://giorgis.dev" target="_blank" rel="noopener">giorgis.dev</a>
+  <button id="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
+    <span class="tt-sun" aria-hidden="true">&#9728;</span><span class="tt-moon" aria-hidden="true">&#9790;</span>
+    <span class="tt-track"><span class="tt-knob"></span></span>
+  </button>
   <header id="toolbar">
     <div class="toolbar-group">
       <button id="btn-home" class="btn icon" title="Back to start page (your work is autosaved)">&#8962;</button>
@@ -72,19 +89,148 @@
       <main id="workspace">
         <div id="font-report" hidden></div>
         <div id="start-page">
-          <section class="start-top">
-            <h2>Start a new document</h2>
-            <button id="start-open" class="start-card">
-              <span class="start-thumb start-plus">+</span>
-              <span class="start-name">Open a PDF</span>
-              <span class="start-meta">or drop one anywhere</span>
-            </button>
+          <section class="hero">
+            <div class="hero-inner">
+              <p class="hero-eyebrow">PDF Max &middot; the free Acrobat alternative</p>
+              <h1>Edit your resume PDF.<br />Keep it a real PDF.</h1>
+              <p class="hero-sub">Most free editors turn your resume into a picture, and then the applicant tracking system can't read a word of it. PDF Max edits the actual text and keeps your fonts, and it all happens in your browser, so there's no sign-up and your file never gets uploaded.</p>
+              <div class="hero-cta">
+                <button id="hero-open" class="hero-btn">Open a PDF</button>
+                <span class="hero-or">or drop one anywhere</span>
+              </div>
+              <p class="mobile-note">PDF Max is built for a mouse and keyboard, so it works best on a computer.</p>
+              <ul class="hero-chips">
+                <li>Free, no paywall</li><li>No sign-up</li><li>No watermark</li><li>100% in your browser</li>
+              </ul>
+            </div>
+            <div id="dropzone" role="button" tabindex="0" aria-label="Drop a PDF here or click to choose one">
+              <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+              <strong><span class="dz-desktop">Drop your PDF here</span><span class="dz-touch">Choose a PDF</span></strong>
+              <span><span class="dz-desktop">or click to choose a file &middot; </span>it never leaves your browser</span>
+            </div>
+            <div class="features">
+              <article class="feature">
+                <div class="demo demo-edit" aria-hidden="true">
+                  <div class="cam">
+                    <div class="sheet"></div>
+                    <div class="d-name">YOUR NAME</div>
+                    <div class="d-sec">EXPERIENCE</div><div class="d-rule"></div>
+                    <div class="d-line l1"><span class="old">Software Intern</span><span class="new">Software Engineer</span></div>
+                    <div class="d-sub">Built and shipped a web app used by thousands</div>
+                    <div class="d-sub s2">Grew monthly users 4x through SEO and sharing</div>
+                    <div class="d-sub s3">Designed the backend and automated daily jobs</div>
+                    <div class="sel-box"></div>
+                    <div class="ripple"></div>
+                    <svg class="cursor" viewBox="0 0 24 24"><path d="M3 2l7 19 3-8 8-3z" fill="#111" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div class="badge">Click any line to edit it in place</div>
+                </div>
+                <h3>Click, type, done</h3>
+                <p>Every line of a PDF is a live text box. Click it, rewrite it, and the paragraph re-wraps like a normal document.</p>
+              </article>
+
+              <article class="feature">
+                <div class="demo demo-font" aria-hidden="true">
+                  <div class="cam">
+                    <div class="sheet"></div>
+                    <div class="d-name">YOUR NAME</div>
+                    <div class="d-line l2"><span class="f-a">State University</span><span class="f-b">State University</span></div>
+                    <div class="d-sub s1">B.S. in Computer Science</div>
+                    <div class="sel-box"></div>
+                    <div class="ripple"></div>
+                    <svg class="cursor" viewBox="0 0 24 24"><path d="M3 2l7 19 3-8 8-3z" fill="#111" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div class="fbar">
+                    <span class="chip chip-font"><b>Font</b> <i class="f-a-t">Libre Caslon Text</i><i class="f-b-t">Georgia</i></span>
+                    <span class="chip">12 pt</span><span class="chip chip-b">B</span><span class="chip dot"></span>
+                    <span class="detected">Detected from your PDF</span>
+                  </div>
+                  <div class="menu"><div>Arial / Helvetica</div><div class="pick">Georgia</div><div>Times New Roman</div></div>
+                  <div class="badge">Fonts and sizes are detected automatically</div>
+                </div>
+                <h3>Font detection</h3>
+                <p>PDF Max reads the font, size, weight and color of every line, so your edits match the original instead of looking pasted in.</p>
+              </article>
+
+              <article class="feature">
+                <div class="demo demo-multi" aria-hidden="true">
+                  <div class="cam">
+                    <div class="sheet"></div>
+                    <div class="d-name">YOUR NAME</div>
+                    <div class="m m1">City, ST</div>
+                    <div class="m m2">giorgis.dev</div>
+                    <div class="m m3">555-123-4567</div>
+                    <div class="guide"></div>
+                    <div class="marquee"></div>
+                    <svg class="cursor" viewBox="0 0 24 24"><path d="M3 2l7 19 3-8 8-3z" fill="#111" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div class="alignbtn">Align left</div>
+                  <div class="badge">Drag to select, then align or nudge</div>
+                </div>
+                <h3>Select, move &amp; align</h3>
+                <p>Drag a box around anything. Move, align, duplicate or nudge whole groups with arrow keys, down to 0.1 pt, and undo any of it.</p>
+              </article>
+
+              <article class="feature">
+                <div class="demo demo-ats" aria-hidden="true">
+                  <div class="cam">
+                    <div class="sheet"></div>
+                    <div class="a-row r1"><b>YOUR NAME</b></div>
+                    <div class="a-row r2">Software Engineer | Computer Science</div>
+                    <div class="a-row r3"><b>EDUCATION</b></div>
+                    <div class="a-row r4">State University &nbsp;&nbsp; City, ST</div>
+                    <div class="a-row r5">Sep 2022 - May 2026</div>
+                    <svg class="cursor" viewBox="0 0 24 24"><path d="M3 2l7 19 3-8 8-3z" fill="#111" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div class="export">Export PDF</div>
+                  <div class="paste">
+                    <em>What an ATS reads</em>
+                    <span style="--i:0">Your Name</span><span style="--i:1">Software Engineer | Computer&hellip;</span><span style="--i:2">EDUCATION</span><span style="--i:3">State University&hellip;</span><span style="--i:4">Sep 2022 - May 2026</span>
+                  </div>
+                  <div class="badge ok">&#10003; Real text, in the right order</div>
+                </div>
+                <h3>ATS-safe export</h3>
+                <p>Nothing is flattened into an image. Text stays selectable, searchable and in reading order, so recruiters' software parses it correctly.</p>
+              </article>
+            </div>
+            <div class="proof">
+              <h2>What a recruiter's software actually reads</h2>
+              <p class="proof-sub">Select all, copy, and paste the PDF into any text box. That is roughly what an applicant tracking system sees.</p>
+              <div class="proof-grid">
+                <div class="proof-col bad">
+                  <span class="proof-tag">Flattened by many free editors</span>
+                  <pre>[ nothing to paste ]
+
+The page was saved as a picture,
+so there is no text in the file.</pre>
+                </div>
+                <div class="proof-col good">
+                  <span class="proof-tag">Exported from PDF Max</span>
+                  <pre>YOUR NAME
+Software Engineer | Computer Science
+EDUCATION
+State University   City, ST
+Sep 2022 - May 2026
+* Built and shipped a web app used by
+  thousands</pre>
+                </div>
+              </div>
+            </div>
+            <div class="template-section">
+              <div class="or-divider"><span>OR Choose from a template</span></div>
+              <div id="template-grid"></div>
+            </div>
           </section>
+          <button id="start-open" type="button" hidden aria-hidden="true" tabindex="-1">Open a PDF</button>
           <section class="start-recent">
             <h2>Recent documents - Autosave up to 3 docs at a time</h2>
             <div id="recent-grid"></div>
             <p id="recent-empty">No recent documents yet. Your last 3 autosaved files will show up here.</p>
           </section>
+          <footer class="site-footer">
+            <p>Your PDF is opened and edited entirely in your browser. It is never uploaded, and the only thing saved is an autosaved copy on your own device.</p>
+            <p><a href="https://github.com/giorgisdev/pdf-max" target="_blank" rel="noopener">GitHub</a> &middot; Made by <a href="https://giorgis.dev" target="_blank" rel="noopener">giorgis.dev</a></p>
+          </footer>
         </div>
         <div id="pages"></div>
       </main>

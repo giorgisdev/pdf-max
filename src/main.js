@@ -110,7 +110,9 @@ async function loadFile(file) {
 // ---------- text extraction ----------
 
 const BULLET_START = /^\s*(?:[•▪◦●·*\-–—]|\d{1,2}[.)])\s/;
-const CONTINUATION_START = /^[a-z0-9(\[,;.)&]/;
+const CONTINUATION_START = /^[a-z(\[,;.)&]/;
+// A short all-caps line (AWARDS, EDUCATION) is a section heading, never the start of a paragraph.
+const HEADING_LINE = /^[^a-z]{2,40}$/;
 
 // Join lines that were only split by word-wrap back into one paragraph item,
 // so editing a wrapped bullet reflows instead of leaving stray half-boxes.
@@ -119,7 +121,7 @@ const CONTINUATION_START = /^[a-z0-9(\[,;.)&]/;
 // (or, for a bullet, at its hanging indent), and reads as a continuation: it
 // starts lowercase/with a digit, continues a bullet, or the upper line ran
 // full-width. `lines` must be sorted top-to-bottom (as extractItems sorts).
-function groupParagraphs(lines, pageWidth) {
+function groupParagraphs(lines, pageWidth, dividers = []) {
   const rights = lines.filter((l) => l.width > pageWidth * 0.45).map((l) => l.x + l.width).sort((a, b) => a - b);
   const margin = rights.length ? rights[Math.floor((rights.length - 1) * 0.75)] : null;
   const next = new Map();
@@ -128,6 +130,7 @@ function groupParagraphs(lines, pageWidth) {
 
   for (const a of lines) {
     const aHead = !hasPrev.has(a);
+    if (HEADING_LINE.test(a.str.trim()) && /[A-Z]/.test(a.str)) continue;
     if (aHead && BULLET_START.test(a.str)) bulletChain.add(a);
     let best = null;
     let bestHanging = false;
@@ -137,6 +140,9 @@ function groupParagraphs(lines, pageWidth) {
       if (gap < a.size * 0.95 || gap > a.size * 1.75) continue;
       if (b.fontRaw !== a.fontRaw || Math.abs(b.size - a.size) > 0.5) continue;
       if (BULLET_START.test(b.str)) continue;
+      // A vector divider line between the two lines separates them (section header vs entry).
+      if (dividers.some((d) => d.y < a.y + a.size * 0.2 && d.y > b.y - b.size * 0.1
+        && d.x < a.x + a.width && d.x + d.width > a.x)) continue;
       const dx = b.x - a.x;
       const aligned = Math.abs(dx) <= a.size * 0.6;
       const hanging = aHead && bulletChain.has(a) && dx > a.size * 0.3 && dx < a.size * 4;
@@ -180,7 +186,7 @@ function groupParagraphs(lines, pageWidth) {
 
 // Pull positioned text runs out of a pdf.js page and merge fragments that sit
 // on the same baseline with the same font into editable line segments.
-async function extractItems(page) {
+async function extractItems(page, dividers = []) {
   const textContent = await page.getTextContent();
   const raw = [];
 
@@ -230,7 +236,7 @@ async function extractItems(page) {
   }
 
   const pageWidth = page.getViewport({ scale: 1 }).width;
-  return groupParagraphs(merged.filter((m) => m.str.trim().length > 0), pageWidth)
+  return groupParagraphs(merged.filter((m) => m.str.trim().length > 0), pageWidth, dividers)
     .map((m) => {
       const det = detectFont(m.fontRaw);
       const rec = state.detectedFonts.get(cleanFontName(m.fontRaw)) || { ...det, count: 0 };
@@ -331,10 +337,11 @@ async function renderPage(pageNum) {
   state.pages[pageNum - 1] = pageState;
 
   await applyViewport(pageState);
-  pageState.items = await extractItems(page);
+  let detected = [];
+  try { detected = await extractLines(page); } catch (err) { console.warn('Could not detect decorative lines on this page', err); }
+  pageState.items = await extractItems(page, detected);
   for (const item of pageState.items) mountItem(pageState, item);
   try {
-    const detected = await extractLines(page);
     pageState.lines = detected.map((ln) => ({
       id: state.nextId++,
       x: ln.x, y: ln.y, ox: ln.x, oy: ln.y,
@@ -523,7 +530,7 @@ function closeConfirmModal() {
 const ITEM_FIELDS = [
   'id', 'str', 'original', 'x', 'y', 'ox', 'oy', 'osize', 'owidth', 'size', 'width',
   'fontId', 'bold', 'italic', 'color', 'align', 'edited', 'deleted', 'isNew', 'fontRaw',
-  'height', 'oheight', 'isLine', 'para', 'leading', 'plines', 'owrap', 'indent',
+  'height', 'oheight', 'isLine', 'para', 'leading', 'plines', 'owrap', 'indent', 'wrapW',
 ];
 
 function serializeItem(it) {
@@ -790,7 +797,7 @@ function positionEl(pageState, item, el) {
   el.style.left = `${vx}px`;
   el.style.top = `${vy - fontPx * 0.88}px`;
   el.style.fontSize = `${fontPx}px`;
-  if (item.isNew) {
+  if (item.isNew || item.wrapW) {
     // A real box with a set width, so long text wraps inside it instead of
     // running off in one line — resizable via the width handle.
     el.style.width = `${Math.max(item.width * pageState.scale, fontPx * 2)}px`;
@@ -800,7 +807,7 @@ function positionEl(pageState, item, el) {
     el.style.width = '';
   }
   el.style.minHeight = `${fontPx * 1.1}px`;
-  el.classList.toggle('para-box', !!item.para);
+  el.classList.toggle('para-box', !!item.para || !!item.wrapW);
   el.style.paddingLeft = '';
   el.style.textIndent = '';
   if (item.para) {
@@ -949,7 +956,7 @@ function mountLine(pageState, line) {
 // ---------- undo / redo ----------
 
 const history = { undo: [], redo: [] };
-const SNAP_PROPS = ['str', 'x', 'y', 'size', 'width', 'fontId', 'bold', 'italic', 'color', 'align', 'edited', 'deleted', 'para', 'leading', 'oheight', 'indent'];
+const SNAP_PROPS = ['str', 'x', 'y', 'size', 'width', 'fontId', 'bold', 'italic', 'color', 'align', 'edited', 'deleted', 'para', 'leading', 'oheight', 'indent', 'wrapW'];
 
 function snapshot(item) {
   const s = {};
@@ -1223,7 +1230,9 @@ function startWidthResize(item, e) {
   const onMove = (ev) => {
     const dx = ev.clientX - startX;
     item.width = Math.max(30, startWidth + dx / scale);
-    if (item.para) item.edited = true;
+    // Dragging the width handle on a single-line original turns it into a wrapping box.
+    if (!item.isNew && !item.para) item.wrapW = true;
+    if (item.para || item.wrapW) item.edited = true;
     positionEl(item.pageState, item, item.el);
     updateHandle();
   };
@@ -1237,8 +1246,8 @@ function startWidthResize(item, e) {
 }
 
 // Floating resize handles, attached to whichever item is selected: one for
-// font size (bottom-right corner), one for box width (right edge, new boxes
-// only — original single-line PDF text doesn't wrap so width is moot there).
+// font size (bottom-right corner), one for box width (right edge; on a
+// single-line original it makes the box wrap).
 let handleEl = null;
 let widthHandleEl = null;
 
@@ -1270,13 +1279,12 @@ function updateHandle() {
   handleEl.style.left = `${el.offsetLeft + el.offsetWidth - 5}px`;
   handleEl.style.top = `${el.offsetTop + el.offsetHeight - 5}px`;
 
-  if (item.isNew || item.para) {
-    item.pageState.overlay.appendChild(widthHandleEl);
-    widthHandleEl.style.left = `${el.offsetLeft + el.offsetWidth - 5}px`;
-    widthHandleEl.style.top = `${el.offsetTop + el.offsetHeight / 2 - 5}px`;
-  } else {
-    widthHandleEl.remove();
-  }
+  // Width handle for every text box. On a single-line box the middle of the
+  // right edge is the same spot as the size handle, so nudge it outward.
+  item.pageState.overlay.appendChild(widthHandleEl);
+  const singleLine = el.offsetHeight < 30;
+  widthHandleEl.style.left = `${el.offsetLeft + el.offsetWidth - 5 + (singleLine ? 14 : 0)}px`;
+  widthHandleEl.style.top = `${el.offsetTop + el.offsetHeight / 2 - 5}px`;
 }
 
 // Once an original item moves away from its extracted position, leave a white

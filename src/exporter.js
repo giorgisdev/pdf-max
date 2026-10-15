@@ -300,6 +300,10 @@ function wrapBoxLines(font, box) {
 // wrapped paragraph keeps its original line breaks until its text or width
 // changes, then re-wraps to its width at the original leading.
 function itemLines(font, it) {
+  if (!it.para && it.wrapW) {
+    // Single-line original resized into a wrapping box.
+    return wrapBoxLines(font, it).map((text, i) => ({ text, y: it.y - i * it.size * 1.25, dx: 0 }));
+  }
   if (!it.para) return [{ text: it.str, y: it.y, dx: 0 }];
   let texts;
   if (it.str === it.original && it.width === it.owrap) {

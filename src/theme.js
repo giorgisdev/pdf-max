@@ -1,15 +1,15 @@
 // Light / dark toggle. A saved choice wins; otherwise dark on desktop and the
 // system setting on mobile (the initial pick is made by the inline script in index.html).
 export function initTheme() {
-  const btn = document.getElementById('theme-toggle');
-  if (!btn) return;
+  const btns = [...document.querySelectorAll('.theme-toggle')];
+  if (!btns.length) return;
   const apply = (dark) => {
     if (dark) document.documentElement.dataset.theme = 'dark';
     else delete document.documentElement.dataset.theme;
-    btn.setAttribute('aria-pressed', String(dark));
+    for (const b of btns) b.setAttribute('aria-pressed', String(dark));
   };
   apply(document.documentElement.dataset.theme === 'dark');
-  btn.addEventListener('click', () => {
+  for (const b of btns) b.addEventListener('click', () => {
     const dark = document.documentElement.dataset.theme !== 'dark';
     apply(dark);
     try { localStorage.setItem('theme', dark ? 'dark' : 'light'); } catch { /* storage unavailable */ }

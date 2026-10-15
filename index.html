@@ -21,7 +21,7 @@
 </head>
 <body>
   <a id="home-link" href="https://giorgis.dev" target="_blank" rel="noopener">giorgis.dev</a>
-  <button id="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
+  <button id="theme-toggle" class="theme-toggle floating" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
     <span class="tt-sun" aria-hidden="true">&#9728;</span><span class="tt-moon" aria-hidden="true">&#9790;</span>
     <span class="tt-track"><span class="tt-knob"></span></span>
   </button>
@@ -71,6 +71,10 @@
         <input type="checkbox" id="ctl-links" checked /> Clickable links
       </label>
       <span id="autosave-indicator" title="Local autosave status"></span>
+      <button class="theme-toggle" type="button" aria-label="Toggle dark mode" aria-pressed="false" title="Toggle dark mode">
+        <span class="tt-sun" aria-hidden="true">&#9728;</span><span class="tt-moon" aria-hidden="true">&#9790;</span>
+        <span class="tt-track"><span class="tt-knob"></span></span>
+      </button>
       <button id="btn-export" class="btn primary" disabled>Export PDF</button>
     </div>
   </header>
@@ -80,6 +84,11 @@
       <div class="pages-panel-header">
         <span>Pages</span>
         <button id="btn-delete-pages" class="btn danger icon-trash" title="Delete selected pages" disabled>&#128465;</button>
+      </div>
+      <div class="pages-actions">
+        <button id="btn-add-blank" class="btn" disabled>+ Add blank page</button>
+        <button id="btn-add-files" class="btn" disabled>+ Add more files</button>
+        <input id="add-files-input" type="file" accept="application/pdf,.pdf,image/png,image/jpeg" multiple hidden />
       </div>
       <div id="pages-grid"></div>
       <p id="pages-panel-hint">Open a PDF to see its pages here. Drag to reorder, click to select.</p>

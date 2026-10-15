@@ -7,6 +7,7 @@ import { exportPdf, preflightExport } from './exporter.js';
 import { TEMPLATES, buildTemplateFile } from './templates.js';
 import { saveDraft, loadDraft, listDrafts, deleteDraft } from './draft.js';
 import { extractLines } from './lines.js';
+import { appendBlankPage, appendFiles } from './addpages.js';
 import { inject } from '@vercel/analytics';
 import { initSplash } from './splash.js';
 import { initTheme } from './theme.js';
@@ -61,6 +62,7 @@ const els = {
   preflightModal: $('preflight-modal'), preflightList: $('preflight-list'),
   preflightCancel: $('preflight-cancel'), preflightOk: $('preflight-ok'),
   autosaveIndicator: $('autosave-indicator'),
+  btnAddBlank: $('btn-add-blank'), btnAddFiles: $('btn-add-files'), addFilesInput: $('add-files-input'),
 };
 
 // ---------- helpers ----------
@@ -105,6 +107,7 @@ async function loadFile(file) {
   attachThumb();
   els.btnExport.disabled = false;
   els.btnAddText.disabled = false;
+  els.btnAddBlank.disabled = els.btnAddFiles.disabled = false;
   els.btnZoomIn.disabled = state.zoomIdx === ZOOM_LEVELS.length - 1;
   els.btnZoomOut.disabled = state.zoomIdx === 0;
   renderFontReport();
@@ -335,6 +338,7 @@ async function renderPage(pageNum) {
   const pageState = {
     page, wrap, canvas, overlay, pageNum,
     baseWidth: page.getViewport({ scale: 1 }).width,
+    baseHeight: page.getViewport({ scale: 1 }).height,
     viewport: null, scale: null,
     items: [], newBoxes: [], lines: [],
   };
@@ -514,6 +518,41 @@ function deleteSelectedPages() {
   });
 }
 
+// Append pages (blank, or from other PDFs/images) to the end of the document.
+// The document's bytes are rebuilt and reloaded, but existing pages keep their
+// indices and on-screen state; only the new pages are rendered.
+async function addPagesToDocument(build) {
+  if (!state.pdfBytes) return;
+  try {
+    status('Adding pages…');
+    if (state.selected) commitEdit(state.selected);
+    const result = await build(state.pdfBytes);
+    if (!result.added) {
+      status(result.skipped?.length ? `Couldn't add ${result.skipped.join(', ')} (PDF, PNG or JPG only).` : 'Nothing was added.', true);
+      return;
+    }
+    const oldCount = state.pages.length;
+    const newBytes = result.bytes;
+    const newDoc = await pdfjsLib.getDocument({ data: newBytes.slice() }).promise;
+    state.pdfBytes = newBytes;
+    state.pdfDoc = newDoc; // the old doc stays alive for the pages already rendered
+    for (let p = oldCount + 1; p <= newDoc.numPages; p++) await renderPage(p);
+    applyPageOrder();
+    state.pages[oldCount]?.wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    markDirty();
+    const skipped = result.skipped?.length ? ` Skipped ${result.skipped.join(', ')}.` : '';
+    status(`Added ${result.added} page${result.added === 1 ? '' : 's'}.${skipped}`, !!skipped);
+  } catch (err) {
+    status(`Could not add pages: ${err.message}`, true);
+  }
+}
+
+function addBlankPage() {
+  const last = state.pages[state.pageOrder[state.pageOrder.length - 1]];
+  const size = last ? [last.baseWidth, last.baseHeight] : null;
+  return addPagesToDocument((bytes) => appendBlankPage(bytes, size));
+}
+
 // ---------- confirm modal ----------
 
 let confirmCallback = null;
@@ -632,6 +671,7 @@ function resetDocument() {
   els.btnDeletePages.disabled = true;
   els.btnExport.disabled = true;
   els.btnAddText.disabled = true;
+  els.btnAddBlank.disabled = els.btnAddFiles.disabled = true;
   els.btnZoomIn.disabled = true;
   els.btnZoomOut.disabled = true;
   els.fontReport.hidden = true;
@@ -832,6 +872,7 @@ async function restoreDraft(summary) {
 
   els.btnExport.disabled = false;
   els.btnAddText.disabled = false;
+  els.btnAddBlank.disabled = els.btnAddFiles.disabled = false;
   els.btnZoomIn.disabled = state.zoomIdx === ZOOM_LEVELS.length - 1;
   els.btnZoomOut.disabled = state.zoomIdx === 0;
   renderFontReport();
@@ -2044,6 +2085,13 @@ function init() {
   els.btnAddText.addEventListener('click', () => setAddTextMode(!state.addTextMode));
   els.btnExport.addEventListener('click', doExport);
   els.btnDeletePages.addEventListener('click', deleteSelectedPages);
+  els.btnAddBlank.addEventListener('click', addBlankPage);
+  els.btnAddFiles.addEventListener('click', () => els.addFilesInput.click());
+  els.addFilesInput.addEventListener('change', () => {
+    const files = [...els.addFilesInput.files];
+    els.addFilesInput.value = '';
+    if (files.length) addPagesToDocument((bytes) => appendFiles(bytes, files));
+  });
   els.preflightCancel.addEventListener('click', closePreflight);
   els.preflightOk.addEventListener('click', () => { closePreflight(); runExport(); });
   els.confirmCancel.addEventListener('click', closeConfirmModal);

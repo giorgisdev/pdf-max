@@ -366,3 +366,6 @@ body.format-painter-cursor .text-item:not(.editing) { cursor: copy; }
 #preflight-list li { padding: 7px 10px 7px 12px; margin-bottom: 6px; border-radius: 6px; border-left: 4px solid #8a93a0; background: #f4f6f8; }
 #preflight-list li.error { border-left-color: #c62828; background: #fdecea; }
 #preflight-list li.warn { border-left-color: #e8a000; background: #fff6df; }
+
+.pages-actions { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-bottom: 1px solid #e2e5e9; }
+.pages-actions .btn { width: 100%; text-align: center; }

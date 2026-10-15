@@ -209,6 +209,37 @@ function alignOffset(font, text, size, align, boxWidth) {
   return align === 'center' ? extra / 2 : extra;
 }
 
+// Sorts drawables ({ obj }) into reading order: rows top to bottom, left to
+// right within a row. A short right-hand item (a date or location) whose
+// baseline is a little off its left-hand partner's is pulled onto that row so
+// it reads right after the partner instead of between other lines.
+function readingOrder(drawables, pageWidth) {
+  const info = drawables.map((d) => {
+    const o = d.obj;
+    const w = o.width || o.size * 0.5 * (o.str?.length || 1);
+    return { d, x: o.x, y: o.y, size: o.size || 10, w, effY: o.y };
+  });
+  for (const r of info) {
+    if (r.x < pageWidth * 0.5) continue;
+    let best = null;
+    for (const c of info) {
+      if (c === r || c.x + c.w >= r.x || c.x >= pageWidth * 0.5) continue;
+      const dy = Math.abs(c.y - r.y);
+      if (dy < r.size * 0.4) { best = null; break; } // already on a left item's row
+      if (dy <= r.size * 0.95 && (!best || dy < Math.abs(best.y - r.y))) best = c;
+    }
+    if (best) r.effY = best.y;
+  }
+  info.sort((a, b) => b.effY - a.effY || a.x - b.x);
+  const rows = [];
+  for (const r of info) {
+    const row = rows[rows.length - 1];
+    if (row && Math.abs(row.y - r.effY) < r.size * 0.4) row.items.push(r);
+    else rows.push({ y: r.effY, items: [r] });
+  }
+  return rows.flatMap((row) => row.items.sort((a, b) => a.x - b.x)).map((r) => r.d);
+}
+
 // A new text box's raw '\n'-separated paragraphs, each word-wrapped to the
 // box's width.
 function wrapBoxLines(font, box) {
@@ -299,7 +330,10 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
     const state = pagesState[p];
     if (!state) continue;
 
-    const anyEdit = state.items.some((it) => it.edited || it.deleted);
+    // New text boxes also force the rewrite: otherwise they'd be appended after
+    // the untouched original text, putting them last in extraction order.
+    const anyEdit = state.items.some((it) => it.edited || it.deleted)
+      || state.newBoxes.some((b) => !b.deleted && b.str && b.str.trim());
 
     if (anyEdit) {
       // Strip every original text object, then redraw ALL text (edited and
@@ -336,11 +370,17 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
       }
     }
 
-    if (anyEdit) {
-      for (const it of state.items) {
-        if (it.deleted) continue;
-        if (!it.str || !it.str.trim()) continue;
-        const font = await pool.get(it.fontId, it.bold, it.italic);
+    // Draw everything in reading order (rows top to bottom, left to right) so
+    // text extraction, ATS parsers and mouse selection follow the layout
+    // rather than the order boxes were created in.
+    const drawables = [
+      ...(anyEdit ? state.items.map((obj) => ({ obj, isItem: true })) : []),
+      ...state.newBoxes.map((obj) => ({ obj, isItem: false })),
+    ].filter(({ obj }) => !obj.deleted && obj.str && obj.str.trim());
+    for (const { obj, isItem } of readingOrder(drawables, page.getWidth())) {
+      const font = await pool.get(obj.fontId, obj.bold, obj.italic);
+      if (isItem) {
+        const it = obj;
         for (const { text, y, dx } of itemLines(font, it)) {
           if (!text.trim()) continue;
           const x = it.x + dx + alignOffset(font, text, it.size, it.align, it.width);
@@ -349,21 +389,17 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
           }, font);
           if (!ok) warnings.push(`Page ${p + 1}: some characters in "${text.slice(0, 30)}…" were substituted (not supported by the export font).`);
         }
+      } else {
+        const box = obj;
+        wrapBoxLines(font, box).forEach((line, li) => {
+          if (!line.trim()) return;
+          const x = box.x + alignOffset(font, line, box.size, box.align, box.width);
+          drawTextSafe(page, line, {
+            x, y: box.y - li * box.size * 1.25,
+            size: box.size, font, color: hexToRgb(box.color),
+          }, font);
+        });
       }
-    }
-
-    for (const box of state.newBoxes) {
-      if (box.deleted || !box.str || !box.str.trim()) continue;
-      const font = await pool.get(box.fontId, box.bold, box.italic);
-      const lines = wrapBoxLines(font, box);
-      lines.forEach((line, li) => {
-        if (!line.trim()) return;
-        const x = box.x + alignOffset(font, line, box.size, box.align, box.width);
-        drawTextSafe(page, line, {
-          x, y: box.y - li * box.size * 1.25,
-          size: box.size, font, color: hexToRgb(box.color),
-        }, font);
-      });
     }
 
     if (linkify) {

@@ -208,6 +208,11 @@ async function extractItems(page) {
   for (const r of raw) {
     const last = merged[merged.length - 1];
     if (
+    // Whitespace-only runs are often wide spacers (tab / right-align padding).
+    // Merging them would stretch the left segment across the row and bridge it
+    // to the right-aligned text (e.g. a date), so skip them: the real gap
+    // between the neighbouring runs then decides whether they merge.
+    if (!r.str.trim()) continue;
       last &&
       Math.abs(last.y - r.y) < 1.5 &&
       last.fontRaw === r.fontRaw &&

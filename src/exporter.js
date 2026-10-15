@@ -155,6 +155,20 @@ function addLinkAnnotation(doc, page, rect, uri) {
   }
 }
 
+// Original link annotations are pinned to where the text used to be. Once a
+// page's text is rewritten (items moved, edited or deleted) they'd sit over
+// unrelated text, so drop them; the "Clickable links" pass re-adds links from
+// the text as it now reads.
+function removeLinkAnnotations(doc, page) {
+  const annots = page.node.lookup(PDFName.of('Annots'));
+  if (!(annots instanceof PDFArray)) return;
+  for (let i = annots.size() - 1; i >= 0; i--) {
+    const a = doc.context.lookup(annots.get(i));
+    const subtype = a?.lookup?.(PDFName.of('Subtype'));
+    if (subtype === PDFName.of('Link')) annots.remove(i);
+  }
+}
+
 // Add invisible link annotations over every URL/email in a text run.
 // `estWidth` is the best known rendered width of the full run (for fallback).
 async function linkifyRun(doc, page, pool, run, str, x, y, estWidth) {
@@ -345,6 +359,7 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
       } catch (err) {
         warnings.push(`Page ${p + 1}: could not rewrite content stream (${err.message}); edited text drawn on top of original.`);
       }
+      removeLinkAnnotations(doc, page);
 
     }
 

@@ -169,6 +169,37 @@ function removeLinkAnnotations(doc, page) {
   }
 }
 
+// Pages we don't rewrite keep their original links, but a link can still be
+// misplaced (e.g. baked in by an earlier export from a version that left it
+// behind after text moved). Drop a link when its URL's text is on the page but
+// not under the link's rectangle. Links whose URL text isn't on the page at all
+// (hyperlinked words like "Portfolio") can't be judged and are kept.
+function removeMisplacedLinks(doc, page, items) {
+  const annots = page.node.lookup(PDFName.of('Annots'));
+  if (!(annots instanceof PDFArray)) return;
+  const live = items.filter((it) => !it.deleted && it.str);
+  for (let i = annots.size() - 1; i >= 0; i--) {
+    const a = doc.context.lookup(annots.get(i));
+    if (a?.lookup?.(PDFName.of('Subtype')) !== PDFName.of('Link')) continue;
+    const uri = a.lookup(PDFName.of('A'))?.lookup?.(PDFName.of('URI'))?.decodeText?.();
+    const rect = a.lookup(PDFName.of('Rect'));
+    if (!uri || !(rect instanceof PDFArray) || rect.size() < 4) continue;
+    const [x1, y1, x2, y2] = [0, 1, 2, 3].map((k) => rect.lookup(k).asNumber());
+    const needle = uri.replace(/^(mailto:|https?:\/\/)/i, '').replace(/^www\./i, '').replace(/\/+$/, '').toLowerCase();
+    if (!needle) continue;
+    const holders = live.filter((it) => it.str.toLowerCase().includes(needle));
+    if (!holders.length) continue;
+    const under = holders.some((it) => {
+      const lines = it.para ? it.para.lines.length : 1;
+      const w = it.width || it.size * it.str.length * 0.5;
+      const top = it.y + it.size, bottom = it.y - (lines - 1) * (it.leading || it.size * 1.2) - it.size * 0.3;
+      return it.x - it.size < Math.max(x1, x2) && it.x + w + it.size > Math.min(x1, x2)
+        && bottom - it.size * 0.5 < Math.max(y1, y2) && top + it.size * 0.5 > Math.min(y1, y2);
+    });
+    if (!under) annots.remove(i);
+  }
+}
+
 // Add invisible link annotations over every URL/email in a text run.
 // `estWidth` is the best known rendered width of the full run (for fallback).
 async function linkifyRun(doc, page, pool, run, str, x, y, estWidth) {
@@ -346,6 +377,7 @@ export async function exportPdf(originalBytes, pagesState, options = {}) {
 
     // New text boxes also force the rewrite: otherwise they'd be appended after
     // the untouched original text, putting them last in extraction order.
+    removeMisplacedLinks(doc, page, state.items);
     const anyEdit = state.items.some((it) => it.edited || it.deleted)
       || state.newBoxes.some((b) => !b.deleted && b.str && b.str.trim());
 

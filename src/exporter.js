@@ -190,7 +190,7 @@ function removeMisplacedLinks(doc, page, items) {
     const holders = live.filter((it) => it.str.toLowerCase().includes(needle));
     if (!holders.length) continue;
     const under = holders.some((it) => {
-      const lines = it.para ? it.para.lines.length : 1;
+      const lines = it.para ? (it.plines?.length || 1) : 1;
       const w = it.width || it.size * it.str.length * 0.5;
       const top = it.y + it.size, bottom = it.y - (lines - 1) * (it.leading || it.size * 1.2) - it.size * 0.3;
       return it.x - it.size < Math.max(x1, x2) && it.x + w + it.size > Math.min(x1, x2)

@@ -4,7 +4,24 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="robots" content="noindex, nofollow" />
-  <title>PDF Max</title>
+  <title>PDF Max: Free Resume PDF Editor</title>
+  <meta name="description" content="Edit your resume PDF for free. Click any text, fix it, and export a PDF with real, selectable text that recruiter software can read. No signup." />
+  <link rel="canonical" href="https://pdfmax.giorgis.dev/" />
+  <!-- Social / Google Images preview. To allow indexing, remove the noindex meta above, the X-Robots-Tag in vercel.json and the Disallow in public/robots.txt. -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="PDF Max" />
+  <meta property="og:title" content="PDF Max: Free Resume PDF Editor" />
+  <meta property="og:description" content="Click any text, fix it, and export a PDF that recruiter software can actually read. Free, no signup." />
+  <meta property="og:url" content="https://pdfmax.giorgis.dev/" />
+  <meta property="og:image" content="https://pdfmax.giorgis.dev/og-image.png" />
+  <meta property="og:image:type" content="image/png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="PDF Max: edit your resume PDF for free, shown with a resume being edited" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="PDF Max: Free Resume PDF Editor" />
+  <meta name="twitter:description" content="Click any text, fix it, and export a PDF that recruiter software can actually read." />
+  <meta name="twitter:image" content="https://pdfmax.giorgis.dev/og-image.png" />
   <link rel="stylesheet" href="/src/style.css" />
   <link rel="stylesheet" href="/src/splash.css" />
   <link rel="stylesheet" href="/src/theme.css" />
@@ -203,25 +220,31 @@
               </article>
             </div>
             <div class="proof">
-              <h2>What a recruiter's software actually reads</h2>
-              <p class="proof-sub">Select all, copy, and paste the PDF into any text box. That is roughly what an applicant tracking system sees.</p>
+              <h2>Will a recruiter's software actually read your resume?</h2>
+              <p class="proof-sub">Many free editors save your resume as a picture. It looks fine to you, but the hiring software finds no words in it. Test any PDF in ten seconds:</p>
+              <ol class="proof-steps">
+                <li><kbd>Ctrl/&#8984; A</kbd> Select all</li>
+                <li><kbd>Ctrl/&#8984; C</kbd> Copy</li>
+                <li>Paste into any text box</li>
+              </ol>
               <div class="proof-grid">
                 <div class="proof-col bad">
                   <span class="proof-tag">Flattened by many free editors</span>
-                  <pre>[ nothing to paste ]
-
-The page was saved as a picture,
-so there is no text in the file.</pre>
+                  <div class="proof-box"><div class="proof-bar">What the applicant tracking system sees</div>
+<pre class="empty">[ nothing to paste ]</pre></div>
+                  <p class="proof-result"><b>&#10007; Blank resume.</b> The page was saved as a picture, so there is no text in the file. It can be filtered out before a person ever reads it.</p>
                 </div>
                 <div class="proof-col good">
                   <span class="proof-tag">Exported from PDF Max</span>
-                  <pre>YOUR NAME
-Software Engineer | Computer Science
-EDUCATION
-State University   City, ST
-Sep 2022 - May 2026
-* Built and shipped a web app used by
-  thousands</pre>
+                  <div class="proof-box"><div class="proof-bar">What the applicant tracking system sees</div>
+<pre><span style="--i:0">YOUR NAME</span>
+<span style="--i:1">Software Engineer | Computer Science</span>
+<span style="--i:2">EDUCATION</span>
+<span style="--i:3">State University   City, ST</span>
+<span style="--i:4">Sep 2022 - May 2026</span>
+<span style="--i:5">* Built and shipped a web app used by</span>
+<span style="--i:6">  thousands</span></pre></div>
+                  <p class="proof-result"><b>&#10003; Every line is real text.</b> Name, school and dates are read in the right order, so your resume is parsed correctly.</p>
                 </div>
               </div>
             </div>

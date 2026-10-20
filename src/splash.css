@@ -184,7 +184,7 @@ body.on-start #pages-panel { display: none; }
 }
 #dropzone strong { font-size: 18px; color: #14172b; margin-top: 6px; }
 #dropzone span { font-size: 13.5px; color: #5a5f6b; }
-#dropzone:hover, #dropzone:focus-visible, #start-page.dragging #dropzone { background: #e6edff; border-color: #2557d6; outline: none; }
+#dropzone:hover, #dropzone:focus-visible, #start-page.dragging #dropzone { background: #e6edff; border-color: #2557d6; }
 #start-page.dragging #dropzone { transform: scale(1.01); }
 #start-page.dragging { outline: none; }
 
@@ -208,13 +208,13 @@ body.on-start #pages-panel { display: none; }
 .proof-col pre { margin: 0; padding: 12px 14px; min-height: 150px; font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #2a2f3d; white-space: pre-wrap; }
 .proof-tag { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 4px 9px; border-radius: 99px; }
 .proof-col.bad .proof-tag { color: #9a2b1f; background: #fdecea; }
-.proof-col.bad pre { color: #8a8f9c; }
+.proof-col.bad pre { color: #6b7080; }
 .proof-steps { list-style: none; counter-reset: s; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 10px; margin: 0 0 22px; padding: 0; font-size: 13.5px; font-weight: 600; color: #2a2f3d; }
 .proof-steps li { counter-increment: s; display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid #dfe2e6; border-radius: 99px; padding: 6px 14px 6px 8px; }
 .proof-steps li::before { content: counter(s); display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #2557d6; color: #fff; font-size: 12px; }
 .proof-steps kbd { font: 600 12px ui-monospace, Menlo, Consolas, monospace; background: #eef0f4; border: 1px solid #d3d7de; border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
 .proof-box { margin-top: 12px; border: 1px solid #d3d7de; border-radius: 8px; overflow: hidden; background: #fafbfc; }
-.proof-bar { font-size: 11.5px; font-weight: 600; color: #6b7080; padding: 6px 12px; background: #eef0f4; border-bottom: 1px solid #d3d7de; }
+.proof-bar { font-size: 11.5px; font-weight: 600; color: #586072; padding: 6px 12px; background: #eef0f4; border-bottom: 1px solid #d3d7de; }
 .proof-col pre.empty { display: grid; place-items: center; font-style: italic; border: 0; }
 .proof-col.bad .proof-box { border-color: #f1b9b2; }
 .proof-col.good .proof-box { border-color: #9fd9b5; }

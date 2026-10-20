@@ -57,7 +57,7 @@ body {
 label.checkbox { display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: #445; cursor: pointer; user-select: none; white-space: nowrap; }
 label.checkbox input { accent-color: #2557d6; cursor: pointer; }
 
-#autosave-indicator { font-size: 12px; color: #8a93a0; min-width: 46px; white-space: nowrap; }
+#autosave-indicator { font-size: 12px; color: #667085; min-width: 46px; white-space: nowrap; }
 #multi-select-label { font-size: 13px; color: #445; font-weight: 600; white-space: nowrap; padding-right: 4px; }
 
 #ctl-font { width: 118px; padding: 5px 4px; border-radius: 6px; border: 1px solid #c8ccd2; font-size: 13px; }
@@ -136,7 +136,7 @@ label.checkbox input { accent-color: #2557d6; cursor: pointer; }
   padding: 10px 14px 14px;
   font-size: 12px;
   line-height: 1.4;
-  color: #8a93a0;
+  color: #667085;
 }
 
 .page-thumb {
@@ -369,3 +369,8 @@ body.format-painter-cursor .text-item:not(.editing) { cursor: copy; }
 
 .pages-actions { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-bottom: 1px solid #e2e5e9; }
 .pages-actions .btn { width: 100%; text-align: center; }
+
+/* Keyboard focus: a visible ring on anything tabbable (mouse clicks don't trigger it). */
+:focus-visible { outline: 2px solid #2557d6; outline-offset: 2px; }
+.btn:focus-visible, .theme-toggle:focus-visible, select:focus-visible, input:focus-visible { outline-offset: 1px; }
+.text-item.editing:focus-visible, #doc-name:focus-visible { outline: none; }
